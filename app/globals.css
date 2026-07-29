@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+:root {
+  --brand-dark: #1b3a6b;
+  --brand-blue: #2e6da4;
+  --brand-light: #e8f1fb;
+  --accent: #ff1b2e;
+  --accent-hover: #e0102a;
+  --bg: #f4f6f9;
+  --card: #ffffff;
+  --border: #d0d8e4;
+  --text: #1a1a2e;
+  --muted: #6b7280;
+  --radius: 10px;
+}
+
+@theme inline {
+  --color-brand-dark: var(--brand-dark);
+  --color-brand-blue: var(--brand-blue);
+  --color-brand-light: var(--brand-light);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-bg: var(--bg);
+  --color-card: var(--card);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --radius-card: var(--radius);
+  --font-sans: var(--font-montserrat), system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+}
