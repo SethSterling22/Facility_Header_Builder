@@ -104,6 +104,11 @@ Container Apps on every push to `main`. It expects these repository secrets:
 | `CONTAINER_APP_NAME` | Target Container App name |
 | `AZURE_RESOURCE_GROUP` | Resource group containing the Container App |
 
+Setting all of this up for the first time (registry, Container App,
+service principal, secrets)? See
+[`docs/deployment-azure.md`](./docs/deployment-azure.md) for a full
+step-by-step walkthrough.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).

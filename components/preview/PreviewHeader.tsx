@@ -49,9 +49,6 @@ export function PreviewHeader({ variant }: { variant: "first" | "default" }) {
       <div className="flex flex-col items-center gap-1 border-b border-text/20 pb-3 text-center">
         {logoEl}
         <p className="text-sm font-semibold text-brand-dark">{name}</p>
-        {facilityInfo.tagline && (
-          <p className="text-xs text-muted">{facilityInfo.tagline}</p>
-        )}
       </div>
     );
   }
@@ -61,12 +58,6 @@ export function PreviewHeader({ variant }: { variant: "first" | "default" }) {
       {logoEl}
       <div className="text-right">
         <p className="text-sm font-semibold text-brand-dark">{name}</p>
-        {facilityInfo.tagline && (
-          <p className="text-xs text-muted">{facilityInfo.tagline}</p>
-        )}
-        {facilityInfo.phone && (
-          <p className="text-xs text-muted">{facilityInfo.phone}</p>
-        )}
       </div>
     </div>
   );
