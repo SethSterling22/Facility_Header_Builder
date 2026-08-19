@@ -22,7 +22,10 @@ export function Step6Review() {
   const handleGenerate = async () => {
     setIsGenerating(true);
     try {
-      const { blob, validation: result } = await generateDotx(wizardState);
+      const { blob, validation: result } = await generateDotx({
+        ...wizardState,
+        logoWidthInches: wizardState.logo.widthInches,
+      });
       setValidation(result);
 
       const url = URL.createObjectURL(blob);

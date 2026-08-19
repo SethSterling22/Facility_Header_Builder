@@ -4,7 +4,11 @@ import { useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import "cropperjs/dist/cropper.css";
 import type { ReactCropperElement } from "react-cropper";
-import { useWizardStore } from "@/lib/store/wizardStore";
+import {
+  useWizardStore,
+  MAX_LOGO_WIDTH_INCHES,
+  MIN_LOGO_WIDTH_INCHES,
+} from "@/lib/store/wizardStore";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Slider } from "@/components/ui/Slider";
@@ -72,6 +76,23 @@ export function Step2Logo() {
             />
             {logo.dataUrl && (
               <div className="mt-5">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                  Printed size
+                </p>
+                <Slider
+                  label="Width on the page (inches)"
+                  value={logo.widthInches}
+                  defaultValue={2.3}
+                  min={MIN_LOGO_WIDTH_INCHES}
+                  max={MAX_LOGO_WIDTH_INCHES}
+                  step={0.1}
+                  onChange={(widthInches) => setLogo({ widthInches })}
+                />
+                <p className="mb-4 text-xs text-muted">
+                  {logo.widthInches.toFixed(1)}in wide — the page fits{" "}
+                  {MAX_LOGO_WIDTH_INCHES}in. Height scales automatically.
+                </p>
+
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
                   Adjustments
                 </p>

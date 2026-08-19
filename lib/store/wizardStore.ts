@@ -10,9 +10,14 @@ import {
 export type WizardMode = "scratch" | "import" | null;
 
 export type HeaderArrangement =
-  | "logo-left-name-right"
+  /** Logo alone, centered. */
+  | "logo-only"
+  /** Logo centered above the facility name. */
   | "logo-centered-stacked"
-  | "logo-only";
+  /** Logo left, facility name right. */
+  | "logo-left-name-right"
+  /** Logo left, full address/phone/fax block right — the Holcombe pattern. */
+  | "logo-left-address-right";
 
 /**
  * Where the facility's own address/phone/fax renders. Footer is the default:
@@ -51,7 +56,17 @@ export type LogoState = {
   brightness: number;
   contrast: number;
   saturation: number;
+  /**
+   * Printed width in inches. Real facility templates range from a small
+   * ~1.3in mark to a 7.4in full-width banner, so this is user-controlled
+   * rather than fitted to a fixed box. Height follows the aspect ratio.
+   */
+  widthInches: number;
 };
+
+/** Printable width of a Letter page at 0.5in margins — the widest a logo can go. */
+export const MAX_LOGO_WIDTH_INCHES = 7.5;
+export const MIN_LOGO_WIDTH_INCHES = 0.5;
 
 export type HeaderLayout = {
   arrangement: HeaderArrangement;
@@ -125,6 +140,7 @@ const defaultLogo: LogoState = {
   brightness: 1,
   contrast: 1,
   saturation: 1,
+  widthInches: 2.3,
 };
 
 const defaultHeaderLayout: HeaderLayout = {
@@ -163,6 +179,7 @@ const VALID_ARRANGEMENTS: HeaderArrangement[] = [
   "logo-only",
   "logo-centered-stacked",
   "logo-left-name-right",
+  "logo-left-address-right",
 ];
 
 /**

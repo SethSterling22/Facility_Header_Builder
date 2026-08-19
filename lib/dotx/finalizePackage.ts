@@ -1,4 +1,5 @@
 import JSZip from "jszip";
+import { THEME1_XML } from "./theme1";
 
 const DOCX_CONTENT_TYPE =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
@@ -127,10 +128,63 @@ async function normalizeBookmarkIds(zip: JSZip): Promise<string[]> {
   return notes;
 }
 
+const THEME_PART = "word/theme/theme1.xml";
+const THEME_CONTENT_TYPE =
+  "application/vnd.openxmlformats-officedocument.theme+xml";
+const THEME_REL_TYPE =
+  "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme";
+
+/**
+ * Adds the Office theme part. `docx` omits it entirely, while every template
+ * RamSoft is known to accept ships one, so it's added here along with its
+ * content-type override and document relationship.
+ */
+async function addThemePart(zip: JSZip): Promise<string[]> {
+  if (zip.file(THEME_PART)) return [];
+
+  zip.file(THEME_PART, THEME1_XML);
+
+  const contentTypesFile = zip.file("[Content_Types].xml");
+  if (contentTypesFile) {
+    const xml = await contentTypesFile.async("string");
+    if (!xml.includes(THEME_PART)) {
+      zip.file(
+        "[Content_Types].xml",
+        xml.replace(
+          "</Types>",
+          `<Override PartName="/${THEME_PART}" ContentType="${THEME_CONTENT_TYPE}"/></Types>`,
+        ),
+      );
+    }
+  }
+
+  const relsPath = "word/_rels/document.xml.rels";
+  const relsFile = zip.file(relsPath);
+  if (relsFile) {
+    const xml = await relsFile.async("string");
+    if (!xml.includes(THEME_REL_TYPE)) {
+      // Continue the existing numbering rather than guessing an unused ID.
+      const maxId = Math.max(
+        0,
+        ...[...xml.matchAll(/Id="rId(\d+)"/g)].map((m) => Number(m[1])),
+      );
+      zip.file(
+        relsPath,
+        xml.replace(
+          "</Relationships>",
+          `<Relationship Id="rId${maxId + 1}" Type="${THEME_REL_TYPE}" Target="theme/theme1.xml"/></Relationships>`,
+        ),
+      );
+    }
+  }
+
+  return [`Added ${THEME_PART} for parity with known-good templates.`];
+}
+
 /**
  * Turns the `.docx` package the `docx` Packer produces into a RamSoft-valid
- * `.dotx`: flips the main-document content-type to the template type and
- * normalizes header/footer relationship IDs and bookmark IDs.
+ * `.dotx`: flips the main-document content-type to the template type, adds the
+ * theme part, and normalizes header/footer relationship IDs and bookmark IDs.
  */
 export async function finalizePackage(
   blob: Blob,
@@ -153,6 +207,7 @@ export async function finalizePackage(
   );
 
   const notes = [
+    ...(await addThemePart(zip)),
     ...(await normalizeRelationshipIds(zip)),
     ...(await normalizeBookmarkIds(zip)),
   ];

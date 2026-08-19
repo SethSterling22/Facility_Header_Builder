@@ -26,6 +26,11 @@ const ARRANGEMENTS: { value: HeaderArrangement; label: string; hint: string }[] 
     label: "Logo left, name right",
     hint: "Logo on the left, facility name aligned right.",
   },
+  {
+    value: "logo-left-address-right",
+    label: "Logo left, address right",
+    hint: "Logo on the left, full address and phone aligned right.",
+  },
 ];
 
 const CONTACT_PLACEMENTS: {
@@ -106,7 +111,7 @@ export function Step4HeaderLayout() {
           options={ARRANGEMENTS}
           selected={headerLayout.arrangement}
           onSelect={(arrangement) => setHeaderLayout({ arrangement })}
-          columns="sm:grid-cols-3"
+          columns="sm:grid-cols-2"
         />
 
         <p className="mt-6 mb-3 text-xs font-semibold tracking-wide text-muted uppercase">

@@ -34,7 +34,11 @@ import {
   VERSION_MARKER,
   type TableBookmarkName,
 } from "./bookmarks";
-import { fitDimensions, type BakedImage } from "./bakeLogo";
+import { type BakedImage } from "./bakeLogo";
+import {
+  EXPERT_RADIOLOGY_LOGO_DATA_URL,
+  EXPERT_RADIOLOGY_LOGO_RENDER_PX,
+} from "./expertRadiologyLogo";
 import {
   PAGE_HEIGHT_TWIPS,
   PAGE_MARGIN_TWIPS,
@@ -64,6 +68,8 @@ export type DotxWizardData = {
   headerLayout: HeaderLayout;
   bookmarkConfig: { included: TableBookmarkName[]; includeAddendum: boolean };
   expertRadiology: ExpertRadiologyConfig;
+  /** Printed logo width in inches, chosen by the facility. */
+  logoWidthInches: number;
 };
 
 /**
@@ -80,9 +86,17 @@ function run(text: string, options: Omit<IRunOptions, "text"> = {}): TextRun {
   });
 }
 
-function buildLogoImageRun(baked: BakedImage | null): ImageRun | null {
+/** docx sizes images in pixels, which it converts to EMU at 96dpi. */
+const PX_PER_INCH = 96;
+
+function buildLogoImageRun(
+  baked: BakedImage | null,
+  widthInches: number,
+): ImageRun | null {
   if (!baked) return null;
-  const { width, height } = fitDimensions(baked, { width: 260, height: 96 });
+  const width = Math.round(widthInches * PX_PER_INCH);
+  // Height follows the trimmed image's aspect ratio so the logo never distorts.
+  const height = Math.round(width * (baked.height / baked.width));
   return new ImageRun({
     type: "png",
     data: baked.dataUrl,
@@ -90,16 +104,22 @@ function buildLogoImageRun(baked: BakedImage | null): ImageRun | null {
   });
 }
 
-/**
- * The facility's address/phone/fax as ONE paragraph with line breaks, so a
- * single `pBdr` puts exactly one line above the first line and one below the
- * last — rather than a border per paragraph.
- */
-function buildContactBlockParagraph(
+function buildExpertLogoRun(): ImageRun {
+  return new ImageRun({
+    type: "png",
+    data: EXPERT_RADIOLOGY_LOGO_DATA_URL,
+    transformation: {
+      width: EXPERT_RADIOLOGY_LOGO_RENDER_PX.width,
+      height: EXPERT_RADIOLOGY_LOGO_RENDER_PX.height,
+    },
+  });
+}
+
+/** The facility's address/phone/fax, one string per rendered line. */
+export function buildContactLines(
   facilityInfo: FacilityInfo,
   locations: Location[],
-  size: number,
-): Paragraph | null {
+): string[] {
   const lines: string[] = [];
 
   for (const loc of locations) {
@@ -108,8 +128,8 @@ function buildContactBlockParagraph(
     else if (loc.name) lines.push(loc.name.toUpperCase());
 
     const contact = [
-      loc.phone && `Phone ${loc.phone}`,
-      loc.fax && `Fax ${loc.fax}`,
+      loc.phone && `Phone: ${loc.phone}`,
+      loc.fax && `Fax: ${loc.fax}`,
     ]
       .filter(Boolean)
       .join("   ");
@@ -118,8 +138,8 @@ function buildContactBlockParagraph(
 
   if (locations.length === 0) {
     const contact = [
-      facilityInfo.phone && `Phone ${facilityInfo.phone}`,
-      facilityInfo.fax && `Fax ${facilityInfo.fax}`,
+      facilityInfo.phone && `Phone: ${facilityInfo.phone}`,
+      facilityInfo.fax && `Fax: ${facilityInfo.fax}`,
     ]
       .filter(Boolean)
       .join("   ");
@@ -127,7 +147,20 @@ function buildContactBlockParagraph(
   }
 
   if (facilityInfo.website) lines.push(facilityInfo.website);
+  return lines;
+}
 
+/**
+ * The contact block as ONE paragraph with line breaks, so a single `pBdr` puts
+ * exactly one line above the first line and one below the last — rather than a
+ * border per paragraph.
+ */
+function buildContactBlockParagraph(
+  facilityInfo: FacilityInfo,
+  locations: Location[],
+  size: number,
+): Paragraph | null {
+  const lines = buildContactLines(facilityInfo, locations);
   if (lines.length === 0) return null;
 
   return new Paragraph({
@@ -140,20 +173,50 @@ function buildContactBlockParagraph(
   });
 }
 
-function buildExpertRadiologyParagraph(): Paragraph {
+/** Unbordered address lines, for sitting beside the logo in a header cell. */
+function buildAddressLinesParagraph(
+  facilityInfo: FacilityInfo,
+  locations: Location[],
+): Paragraph | null {
+  const lines = buildContactLines(facilityInfo, locations);
+  if (lines.length === 0) return null;
   return new Paragraph({
-    alignment: AlignmentType.CENTER,
-    spacing: { before: 40, after: 0 },
-    children: [
-      run(EXPERT_RADIOLOGY_INFO.addressLine, {
-        size: EXPERT_TEXT_HALF_POINTS,
+    alignment: AlignmentType.RIGHT,
+    spacing: { after: 0 },
+    children: lines.map((line, index) =>
+      run(line, {
+        size: FOOTER_TEXT_HALF_POINTS,
+        break: index === 0 ? undefined : 1,
       }),
-      run(EXPERT_RADIOLOGY_INFO.contactLine, {
-        size: EXPERT_TEXT_HALF_POINTS,
-        break: 1,
-      }),
-    ],
+    ),
   });
+}
+
+/**
+ * Expert Radiology's wordmark above its address lines — the same image and
+ * layout the already-accepted templates use.
+ */
+function buildExpertRadiologyParagraphs(): Paragraph[] {
+  return [
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { before: 40, after: 0 },
+      children: [buildExpertLogoRun()],
+    }),
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 0 },
+      children: [
+        run(EXPERT_RADIOLOGY_INFO.addressLine, {
+          size: EXPERT_TEXT_HALF_POINTS,
+        }),
+        run(EXPERT_RADIOLOGY_INFO.contactLine, {
+          size: EXPERT_TEXT_HALF_POINTS,
+          break: 1,
+        }),
+      ],
+    }),
+  ];
 }
 
 /**
@@ -188,7 +251,10 @@ function buildHeaderContent(
   }
 
   const content: (Paragraph | Table)[] = [];
-  const isSideBySide = headerLayout.arrangement === "logo-left-name-right";
+  const isNameBeside = headerLayout.arrangement === "logo-left-name-right";
+  const isAddressBeside =
+    headerLayout.arrangement === "logo-left-address-right";
+  const isSideBySide = isNameBeside || isAddressBeside;
 
   const logoParagraph = new Paragraph({
     alignment: isSideBySide ? AlignmentType.LEFT : AlignmentType.CENTER,
@@ -229,11 +295,20 @@ function buildHeaderContent(
       );
     };
 
-    if (expertBesideLogo) {
+    if (isAddressBeside) {
+      // Holcombe's proportions: a narrow logo column and a wide address column.
+      const addressParagraph = buildAddressLinesParagraph(
+        facilityInfo,
+        data.locations,
+      );
+      addCell(3000, [logoParagraph]);
+      addCell(TABLE_TOTAL_WIDTH - 3000, addressParagraph ? [addressParagraph] : []);
+    } else if (expertBesideLogo) {
       addCell(Math.round(TABLE_TOTAL_WIDTH / 2), [logoParagraph]);
-      addCell(Math.round(TABLE_TOTAL_WIDTH / 2), [
-        buildExpertRadiologyParagraph(),
-      ]);
+      addCell(
+        Math.round(TABLE_TOTAL_WIDTH / 2),
+        buildExpertRadiologyParagraphs(),
+      );
     } else {
       addCell(Math.round(TABLE_TOTAL_WIDTH * 0.4), [logoParagraph]);
       addCell(Math.round(TABLE_TOTAL_WIDTH * 0.6), [nameParagraph]);
@@ -261,7 +336,9 @@ function buildHeaderContent(
     }
   }
 
-  if (headerLayout.contactPlacement === "header") {
+  // The address already sits beside the logo in that arrangement; repeating it
+  // as a bordered block underneath would duplicate it.
+  if (headerLayout.contactPlacement === "header" && !isAddressBeside) {
     const contact = buildContactBlockParagraph(
       facilityInfo,
       data.locations,
@@ -271,7 +348,7 @@ function buildHeaderContent(
   }
 
   if (expertRadiology.include && expertRadiology.placement === "header") {
-    content.push(buildExpertRadiologyParagraph());
+    content.push(...buildExpertRadiologyParagraphs());
   }
 
   content.push(buildSpacerParagraph());
@@ -374,7 +451,7 @@ function buildFooterContent(data: DotxWizardData): (Paragraph | Table)[] {
   }
 
   if (expertRadiology.include && expertRadiology.placement === "footer") {
-    content.push(buildExpertRadiologyParagraph());
+    content.push(...buildExpertRadiologyParagraphs());
   }
 
   content.push(
@@ -482,7 +559,11 @@ export function buildDocument(
     new Header({
       // A fresh ImageRun per header part: the same instance can't be shared
       // across parts, since each part owns its own image relationship.
-      children: buildHeaderContent(data, buildLogoImageRun(bakedLogo), variant),
+      children: buildHeaderContent(
+        data,
+        buildLogoImageRun(bakedLogo, data.logoWidthInches),
+        variant,
+      ),
     });
 
   return new Document({
