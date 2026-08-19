@@ -6,6 +6,7 @@ import "cropperjs/dist/cropper.css";
 import type { ReactCropperElement } from "react-cropper";
 import {
   useWizardStore,
+  DEFAULT_LOGO_WIDTH_INCHES,
   MAX_LOGO_WIDTH_INCHES,
   MIN_LOGO_WIDTH_INCHES,
 } from "@/lib/store/wizardStore";
@@ -24,6 +25,10 @@ export function Step2Logo() {
   const setLogo = useWizardStore((s) => s.setLogo);
   const cropperRef = useRef<ReactCropperElement>(null);
   const [rawSrc, setRawSrc] = useState<string | null>(null);
+
+  // Falls back rather than crashing the page if an older saved session
+  // somehow predates this field.
+  const logoWidth = logo.widthInches ?? DEFAULT_LOGO_WIDTH_INCHES;
 
   const handleFile = (file: File) => {
     const url = URL.createObjectURL(file);
@@ -81,15 +86,15 @@ export function Step2Logo() {
                 </p>
                 <Slider
                   label="Width on the page (inches)"
-                  value={logo.widthInches}
-                  defaultValue={2.3}
+                  value={logoWidth}
+                  defaultValue={DEFAULT_LOGO_WIDTH_INCHES}
                   min={MIN_LOGO_WIDTH_INCHES}
                   max={MAX_LOGO_WIDTH_INCHES}
                   step={0.1}
                   onChange={(widthInches) => setLogo({ widthInches })}
                 />
                 <p className="mb-4 text-xs text-muted">
-                  {logo.widthInches.toFixed(1)}in wide — the page fits{" "}
+                  {logoWidth.toFixed(1)}in wide — the page fits{" "}
                   {MAX_LOGO_WIDTH_INCHES}in. Height scales automatically.
                 </p>
 
