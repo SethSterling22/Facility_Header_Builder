@@ -226,6 +226,17 @@ async function verify({ name, data, withLogo }: Scenario): Promise<string> {
       !(await read("word/header1.xml")).includes("></w:t>"),
   );
 
+  // Every known-good template ships the Office theme part; docx omits it.
+  const themeXml = await read("word/theme/theme1.xml");
+  check("theme1.xml is present", themeXml.includes("<a:theme"));
+  check(
+    "theme is declared and related",
+    contentTypes.includes("theme+xml") &&
+      (await read("word/_rels/document.xml.rels")).includes(
+        "relationships/theme",
+      ),
+  );
+
   let imageRelCount = 0;
   for (const path of partsMatching(/^word\/_rels\/(header|footer)\d+\.xml\.rels$/)) {
     const xml = await read(path);
@@ -278,6 +289,7 @@ const baseData: DotxWizardData = {
   },
   bookmarkConfig: { included: INCLUDED, includeAddendum: false },
   expertRadiology: { include: false, placement: "footer" },
+  logoWidthInches: 2.3,
 };
 
 await mkdir(OUT_DIR, { recursive: true });
@@ -313,6 +325,21 @@ await verify({
       pageOneDifferent: true,
       contactPlacement: "footer",
     },
+  },
+  withLogo: true,
+});
+
+await verify({
+  name: "logo-beside-address-large-logo",
+  data: {
+    ...baseData,
+    headerLayout: {
+      arrangement: "logo-left-address-right",
+      pageOneDifferent: false,
+      contactPlacement: "header",
+    },
+    // A deliberately large logo: real templates go up to 7.36in wide.
+    logoWidthInches: 6,
   },
   withLogo: true,
 });
