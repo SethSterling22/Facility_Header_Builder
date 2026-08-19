@@ -40,9 +40,10 @@ building**, or go straight to `/builder`.
 Other scripts:
 
 ```bash
-npm run build   # production build (static export to ./out)
-npm run start   # serve the production build locally
-npm run lint     # eslint
+npm run build        # production build (static export to ./out)
+npm run start        # serve the production build locally
+npm run lint         # eslint
+npm run verify:dotx  # regression-check the generated .dotx against the RamSoft rules
 ```
 
 ## How the wizard works
@@ -53,33 +54,53 @@ npm run lint     # eslint
 | Facility Info | Name, tagline, primary phone/fax, website. |
 | Logo | Upload, crop/zoom, and adjust brightness/contrast/saturation. |
 | Locations | Add one or more locations for the report footer. |
-| Header Layout | Logo/name arrangement, plus an optional distinct header for page 1 vs. later pages. |
-| Report Fields | Choose which of the 9 RamSoft-approved bookmarks appear in the patient-data table (names are fixed; only inclusion is user-controlled). |
+| Header Layout | Logo/name arrangement, where the facility's contact info goes (footer by default), an optional distinct header for page 1, and the opt-in Expert Radiology block. |
+| Report Fields | Choose which of the 8 RamSoft table bookmarks appear, plus the optional `Addendum` field. |
 | Review & Generate | Validates and downloads the final `.dotx`. |
 
-The live preview panel on the right reflects the same state at every step.
+The live preview renders the page at true Letter proportions in Arial 12, so
+what you see matches the generated document rather than approximating it.
 
 ## `.dotx` generation & import
 
 The generated file has to be a real RamSoft-compatible Word **template**
-(`.dotx`, not `.docx`), so a few rules are non-negotiable and are enforced in
+(`.dotx`, not `.docx`), so a set of rules is non-negotiable and enforced in
 [`lib/dotx/`](./lib/dotx):
 
-- `[Content_Types].xml` is patched to the template content-type after
-  building the document with `docx` (see [`fixContentType.ts`](./lib/dotx/fixContentType.ts)).
-- The patient-data table uses the 9 fixed RamSoft bookmarks
-  (`PatientName`, `PatientID`, `PatientDOB`, `PatientSex`, `ExamDate`,
-  `ExamDesc`, `Accession`, `RefPhysicianName`, `Body`) — see
-  [`bookmarks.ts`](./lib/dotx/bookmarks.ts).
-- Logos are embedded as inline images, never anchored, to avoid the header
-  overlapping the patient-data table.
+- `[Content_Types].xml` is patched to the template content-type, and
+  header/footer image relationships are renumbered to start at `rId1` — see
+  [`finalizePackage.ts`](./lib/dotx/finalizePackage.ts). The `docx` package
+  emits `rId0` for header images, which Word tolerates but RamSoft silently
+  drops, making the logo vanish on the generated report.
+- The patient-data table is **Arial 12pt with bold field labels**, with
+  widened label columns (2200/3000 twips) so `Referring Physician:` doesn't
+  wrap. Arial is also set as the document default in `styles.xml`.
+- **Every bordered info block gets a line above _and_ below** — both the
+  patient-data table and the facility's contact block. Note that cell-level
+  borders override table-level ones in OOXML, so multi-location footers set
+  them per cell.
+- The 8 table bookmarks (`PatientName`, `PatientID`, `PatientDOB`,
+  `PatientSex`, `ExamDate`, `ExamDesc`, `Accession`, `RefPhysicianName`) plus
+  `Body`, and the optional `Addendum` — see [`bookmarks.ts`](./lib/dotx/bookmarks.ts).
+  When `Addendum` is enabled its paragraph is emitted **before** `Body`, since
+  RamSoft renders document order.
+- Logos are embedded as inline images, never anchored, so the header can't
+  overlap the patient-data table. Surrounding whitespace is trimmed first.
+- Expert Radiology's own contact block is **opt-in and off by default** — this
+  template is branded for the facility. When enabled, it's written without a
+  `+1` prefix or `https://`.
 - The `V3` version marker is a fixed constant, never user-editable.
-- [`generateDotx.ts`](./lib/dotx/generateDotx.ts) runs a validation pass
-  (content-type + all selected bookmarks present) before the file downloads.
+- [`generateDotx.ts`](./lib/dotx/generateDotx.ts) re-opens the finished package
+  and validates it before the download starts.
 
 [`lib/import/`](./lib/import) does the reverse for the import flow: it reads
 an uploaded `.dotx` with JSZip/DOMParser and pre-fills the wizard, surfacing
 any extracted text for the user to confirm rather than trusting it silently.
+
+> **Note on RamSoft verification:** a template that validates here and renders
+> correctly in Word/LibreOffice is still not proof it behaves as expected in
+> RamSoft. Only a real RamSoft-generated report, produced *after* the template
+> is swapped in, confirms that.
 
 ## Deployment
 

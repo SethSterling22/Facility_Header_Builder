@@ -74,6 +74,20 @@ export function Step6Review() {
           <dd className="text-text">
             {wizardState.bookmarkConfig.included.length} selected
           </dd>
+          <dt className="text-muted">Contact info</dt>
+          <dd className="text-text capitalize">
+            {wizardState.headerLayout.contactPlacement}
+          </dd>
+          <dt className="text-muted">Addenda at top</dt>
+          <dd className="text-text">
+            {wizardState.bookmarkConfig.includeAddendum ? "Yes" : "No"}
+          </dd>
+          <dt className="text-muted">Expert Radiology info</dt>
+          <dd className="text-text">
+            {wizardState.expertRadiology.include
+              ? `Yes — ${wizardState.expertRadiology.placement.replace("-", " ")}`
+              : "Not included"}
+          </dd>
         </dl>
 
         {validation.status !== "idle" && (

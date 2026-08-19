@@ -1,8 +1,8 @@
-import { DEFAULT_TABLE_ROWS, type BookmarkName } from "./bookmarks";
+import { DEFAULT_TABLE_ROWS, type TableBookmarkName } from "./bookmarks";
 
 export type TableRow = {
-  left: BookmarkName | null;
-  right: BookmarkName | null;
+  left: TableBookmarkName | null;
+  right: TableBookmarkName | null;
 };
 
 /**
@@ -12,9 +12,9 @@ export type TableRow = {
  * a fully-excluded row is dropped, an excluded cell within a kept row is left blank.
  */
 export function computeVisibleRows(
-  included: readonly BookmarkName[],
+  included: readonly TableBookmarkName[],
 ): TableRow[] {
-  const isIncluded = (name: BookmarkName) => included.includes(name);
+  const isIncluded = (name: TableBookmarkName) => included.includes(name);
   return DEFAULT_TABLE_ROWS.map(([left, right]) => ({
     left: isIncluded(left) ? left : null,
     right: isIncluded(right) ? right : null,

@@ -75,7 +75,8 @@ export function WizardShell() {
         )}
       </div>
 
-      <div className="lg:col-start-3 lg:row-start-1 lg:self-start lg:sticky lg:top-8">
+      {/* min-w-0 keeps the fixed-width preview page from blowing out the grid. */}
+      <div className="min-w-0 lg:col-start-3 lg:row-start-1 lg:self-start lg:sticky lg:top-8">
         <Card>
           <CardHeader icon={<Eye className="h-4 w-4" />} title="Live Preview" />
           <CardBody className="bg-bg">

@@ -4,15 +4,30 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import {
   DEFAULT_BOOKMARK_ORDER,
-  type BookmarkName,
+  type TableBookmarkName,
 } from "@/lib/dotx/bookmarks";
 
 export type WizardMode = "scratch" | "import" | null;
 
 export type HeaderArrangement =
-  | "logo-left-address-right"
+  | "logo-left-name-right"
   | "logo-centered-stacked"
   | "logo-only";
+
+/**
+ * Where the facility's own address/phone/fax renders. Footer is the default:
+ * when a facility sends its logo and contact info as separate assets they are
+ * not meant to stack together in the header.
+ */
+export type ContactPlacement = "footer" | "header";
+
+/** Expert Radiology's own info is opt-in and never added by default. */
+export type ExpertRadiologyPlacement = "footer" | "header" | "beside-logo";
+
+export type ExpertRadiologyConfig = {
+  include: boolean;
+  placement: ExpertRadiologyPlacement;
+};
 
 export type FacilityInfo = {
   name: string;
@@ -41,11 +56,17 @@ export type LogoState = {
 export type HeaderLayout = {
   arrangement: HeaderArrangement;
   pageOneDifferent: boolean;
+  contactPlacement: ContactPlacement;
 };
 
 export type BookmarkConfig = {
-  /** Bookmark names the facility wants included, in display order. */
-  included: BookmarkName[];
+  /** Table bookmark names the facility wants included, in display order. */
+  included: TableBookmarkName[];
+  /**
+   * Optional 10th `Addendum` bookmark. When on, its paragraph is emitted
+   * *before* `Body`'s so RamSoft renders addenda at the top of the report.
+   */
+  includeAddendum: boolean;
 };
 
 export type ValidationResult = {
@@ -61,6 +82,7 @@ type WizardState = {
   locations: Location[];
   headerLayout: HeaderLayout;
   bookmarkConfig: BookmarkConfig;
+  expertRadiology: ExpertRadiologyConfig;
   /** Raw text lines pulled from an imported .dotx, surfaced for manual confirmation. */
   importedRawLines: string[];
   validation: ValidationResult;
@@ -74,7 +96,9 @@ type WizardState = {
   removeLocation: (id: string) => void;
   reorderLocations: (fromIndex: number, toIndex: number) => void;
   setHeaderLayout: (layout: Partial<HeaderLayout>) => void;
-  toggleBookmark: (name: BookmarkName, included: boolean) => void;
+  toggleBookmark: (name: TableBookmarkName, included: boolean) => void;
+  setIncludeAddendum: (include: boolean) => void;
+  setExpertRadiology: (config: Partial<ExpertRadiologyConfig>) => void;
   setImportedRawLines: (lines: string[]) => void;
   setValidation: (result: ValidationResult) => void;
   hydrateFromImport: (patch: {
@@ -104,8 +128,15 @@ const defaultLogo: LogoState = {
 };
 
 const defaultHeaderLayout: HeaderLayout = {
-  arrangement: "logo-left-address-right",
+  // Logo alone in the header, contact info in the footer, is the safer default.
+  arrangement: "logo-only",
   pageOneDifferent: false,
+  contactPlacement: "footer",
+};
+
+const defaultExpertRadiology: ExpertRadiologyConfig = {
+  include: false,
+  placement: "footer",
 };
 
 function makeLocationId() {
@@ -119,7 +150,11 @@ const initialState = {
   logo: defaultLogo,
   locations: [] as Location[],
   headerLayout: defaultHeaderLayout,
-  bookmarkConfig: { included: [...DEFAULT_BOOKMARK_ORDER] },
+  bookmarkConfig: {
+    included: [...DEFAULT_BOOKMARK_ORDER],
+    includeAddendum: false,
+  },
+  expertRadiology: defaultExpertRadiology,
   importedRawLines: [] as string[],
   validation: { status: "idle", messages: [] } as ValidationResult,
 };
@@ -182,14 +217,27 @@ export const useWizardStore = create<WizardState>()(
             const next = DEFAULT_BOOKMARK_ORDER.filter(
               (n) => current.includes(n) || n === name,
             );
-            return { bookmarkConfig: { included: next } };
+            return {
+              bookmarkConfig: { ...state.bookmarkConfig, included: next },
+            };
           }
           return {
             bookmarkConfig: {
+              ...state.bookmarkConfig,
               included: current.filter((n) => n !== name),
             },
           };
         }),
+
+      setIncludeAddendum: (includeAddendum) =>
+        set((state) => ({
+          bookmarkConfig: { ...state.bookmarkConfig, includeAddendum },
+        })),
+
+      setExpertRadiology: (config) =>
+        set((state) => ({
+          expertRadiology: { ...state.expertRadiology, ...config },
+        })),
 
       setImportedRawLines: (importedRawLines) => set({ importedRawLines }),
       setValidation: (validation) => set({ validation }),
@@ -204,6 +252,9 @@ export const useWizardStore = create<WizardState>()(
           bookmarkConfig: {
             included:
               patch.bookmarkConfig?.included ?? state.bookmarkConfig.included,
+            includeAddendum:
+              patch.bookmarkConfig?.includeAddendum ??
+              state.bookmarkConfig.includeAddendum,
           },
           importedRawLines: patch.importedRawLines ?? state.importedRawLines,
         })),
@@ -212,6 +263,9 @@ export const useWizardStore = create<WizardState>()(
     }),
     {
       name: "facility-header-builder-wizard",
+      // Bumped when the persisted shape changed (new Rule 9/10/12 fields).
+      // Older saved sessions are dropped rather than half-migrated.
+      version: 2,
     },
   ),
 );

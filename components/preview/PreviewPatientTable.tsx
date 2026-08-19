@@ -1,63 +1,80 @@
 "use client";
 
-import clsx from "clsx";
 import { useWizardStore } from "@/lib/store/wizardStore";
 import { computeVisibleRows } from "@/lib/dotx/tableLayout";
-import { getBookmarkDefinition, type BookmarkName } from "@/lib/dotx/bookmarks";
-import { SAMPLE_PATIENT_DATA } from "@/lib/dotx/sampleData";
+import {
+  getBookmarkDefinition,
+  type TableBookmarkName,
+} from "@/lib/dotx/bookmarks";
+import { SAMPLE_PATIENT_DATA, SAMPLE_BODY_TEXT } from "@/lib/dotx/sampleData";
+import {
+  BODY_FONT_PX,
+  COLUMN_PERCENTS,
+  INFO_BORDER_CSS,
+} from "@/lib/dotx/pageGeometry";
 
 function Cell({
   bookmark,
-  value,
-  width,
+  isValue,
+  widthPercent,
 }: {
-  bookmark: BookmarkName | null;
-  value?: boolean;
-  width: string;
+  bookmark: TableBookmarkName | null;
+  isValue?: boolean;
+  widthPercent: number;
 }) {
-  if (!bookmark) {
-    return <td style={{ width }} className="px-1 py-1.5" />;
-  }
-  const def = getBookmarkDefinition(bookmark);
   return (
     <td
-      style={{ width }}
-      className={clsx(
-        "px-1 py-1.5 align-top",
-        value ? "font-normal text-text" : "font-semibold text-text",
-      )}
+      style={{
+        width: `${widthPercent}%`,
+        verticalAlign: "top",
+        padding: "2px 4px 2px 0",
+        fontWeight: isValue ? 400 : 700,
+      }}
     >
-      {value ? SAMPLE_PATIENT_DATA[bookmark] : def.label}
+      {bookmark
+        ? isValue
+          ? SAMPLE_PATIENT_DATA[bookmark]
+          : getBookmarkDefinition(bookmark).label
+        : ""}
     </td>
   );
 }
 
 export function PreviewPatientTable() {
   const included = useWizardStore((s) => s.bookmarkConfig.included);
+  const includeAddendum = useWizardStore(
+    (s) => s.bookmarkConfig.includeAddendum,
+  );
   const rows = computeVisibleRows(included);
-  const hasBody = included.includes("Body");
 
   return (
-    <div className="border-y border-text/20">
-      {rows.length > 0 && (
-        <table className="w-full border-collapse text-[11px]">
-          <tbody>
-            {rows.map((row, i) => (
-              <tr key={i} className="border-b border-text/10 last:border-b-0">
-                <Cell bookmark={row.left} width="18%" />
-                <Cell bookmark={row.left} value width="32%" />
-                <Cell bookmark={row.right} width="18%" />
-                <Cell bookmark={row.right} value width="32%" />
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      {hasBody && (
-        <p className="px-1 py-2 text-[11px] leading-snug text-text/90">
-          {SAMPLE_PATIENT_DATA.Body}
+    <div style={{ fontSize: BODY_FONT_PX }}>
+      <table
+        style={{
+          width: "100%",
+          borderCollapse: "collapse",
+          borderTop: INFO_BORDER_CSS,
+          borderBottom: INFO_BORDER_CSS,
+        }}
+      >
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={i}>
+              <Cell bookmark={row.left} widthPercent={COLUMN_PERCENTS.label1} />
+              <Cell bookmark={row.left} isValue widthPercent={COLUMN_PERCENTS.value1} />
+              <Cell bookmark={row.right} widthPercent={COLUMN_PERCENTS.label2} />
+              <Cell bookmark={row.right} isValue widthPercent={COLUMN_PERCENTS.value2} />
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {includeAddendum && (
+        <p style={{ marginTop: 10, fontStyle: "italic", opacity: 0.5 }}>
+          [Addendum renders here, above the report body]
         </p>
       )}
+      <p style={{ marginTop: 10, lineHeight: 1.4 }}>{SAMPLE_BODY_TEXT}</p>
     </div>
   );
 }

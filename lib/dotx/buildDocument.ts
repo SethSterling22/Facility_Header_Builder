@@ -15,8 +15,10 @@ import {
   VerticalAlign,
   WidthType,
   type FileChild,
+  type IRunOptions,
 } from "docx";
 import type {
+  ExpertRadiologyConfig,
   FacilityInfo,
   HeaderLayout,
   Location,
@@ -24,46 +26,61 @@ import type {
 import { computeVisibleRows, type TableRow as VisibleRow } from "./tableLayout";
 import {
   getBookmarkDefinition,
+  DOC_FONT,
+  DOC_FONT_HALF_POINTS,
+  EXPERT_RADIOLOGY_INFO,
+  TABLE_COLUMN_WIDTHS,
+  TABLE_TOTAL_WIDTH,
   VERSION_MARKER,
-  type BookmarkName,
+  type TableBookmarkName,
 } from "./bookmarks";
 import { fitDimensions, type BakedImage } from "./bakeLogo";
 
-const LABEL_COL_TWIPS = 1800;
-const VALUE_COL_TWIPS = 2520;
-const LABEL2_COL_TWIPS = 2430;
-const VALUE2_COL_TWIPS = 3600;
+const NO_BORDER = { style: BorderStyle.NONE, size: 0, color: "auto" };
+/** Every bordered info block gets the same weight line above and below it. */
+const INFO_BORDER = {
+  style: BorderStyle.SINGLE,
+  size: 12,
+  color: "auto",
+  space: 1,
+};
+const COLUMN_DIVIDER_BORDER = {
+  style: BorderStyle.SINGLE,
+  size: 4,
+  color: "D9D9D9",
+};
 
-const HEADER_LOGO_CELL_TWIPS = 2600;
-const HEADER_NAME_CELL_TWIPS = 6760;
+/** 0.5in margins so the 10800-twip patient table fits a Letter page exactly. */
+const PAGE_MARGIN_TWIPS = 720;
 
-const NO_BORDER = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
-const ROW_BORDER = { style: BorderStyle.SINGLE, size: 4, color: "999999" };
-const DIVIDER_BORDER = { style: BorderStyle.SINGLE, size: 6, color: "1B3A6B", space: 1 };
-const COLUMN_DIVIDER_BORDER = { style: BorderStyle.SINGLE, size: 4, color: "D9D9D9" };
-const BRAND_NAVY = "1B3A6B";
-
-// Content width for a US Letter page with 1" margins (8.5in - 2in = 6.5in = 9360 twips).
-const CONTENT_WIDTH_TWIPS = 9360;
-
-function buildDividerParagraph(): Paragraph {
-  return new Paragraph({
-    border: { bottom: DIVIDER_BORDER },
-    spacing: { after: 40 },
-    children: [],
-  });
-}
+const FOOTER_TEXT_HALF_POINTS = 16; // 8pt
+const EXPERT_TEXT_HALF_POINTS = 14; // 7pt
 
 export type DotxWizardData = {
   facilityInfo: FacilityInfo;
   locations: Location[];
   headerLayout: HeaderLayout;
-  bookmarkConfig: { included: BookmarkName[] };
+  bookmarkConfig: { included: TableBookmarkName[]; includeAddendum: boolean };
+  expertRadiology: ExpertRadiologyConfig;
 };
+
+/**
+ * Every run carries an explicit Arial face. Relying on the theme's minor font
+ * lets Word/RamSoft/LibreOffice fall back to a serif when the theme isn't
+ * resolved the way we expect.
+ */
+function run(text: string, options: Omit<IRunOptions, "text"> = {}): TextRun {
+  return new TextRun({
+    text,
+    font: DOC_FONT,
+    size: DOC_FONT_HALF_POINTS,
+    ...options,
+  });
+}
 
 function buildLogoImageRun(baked: BakedImage | null): ImageRun | null {
   if (!baked) return null;
-  const { width, height } = fitDimensions(baked, { width: 200, height: 88 });
+  const { width, height } = fitDimensions(baked, { width: 260, height: 96 });
   return new ImageRun({
     type: "png",
     data: baked.dataUrl,
@@ -71,141 +88,151 @@ function buildLogoImageRun(baked: BakedImage | null): ImageRun | null {
   });
 }
 
-function buildHeaderContent(
+/**
+ * The facility's address/phone/fax as ONE paragraph with line breaks, so a
+ * single `pBdr` puts exactly one line above the first line and one below the
+ * last — rather than a border per paragraph.
+ */
+function buildContactBlockParagraph(
   facilityInfo: FacilityInfo,
+  locations: Location[],
+  size: number,
+): Paragraph | null {
+  const lines: string[] = [];
+
+  for (const loc of locations) {
+    const label = loc.name ? `${loc.name.toUpperCase()} — ` : "";
+    if (loc.address) lines.push(`${label}${loc.address}`);
+    else if (loc.name) lines.push(loc.name.toUpperCase());
+
+    const contact = [
+      loc.phone && `Phone ${loc.phone}`,
+      loc.fax && `Fax ${loc.fax}`,
+    ]
+      .filter(Boolean)
+      .join("   ");
+    if (contact) lines.push(contact);
+  }
+
+  if (locations.length === 0) {
+    const contact = [
+      facilityInfo.phone && `Phone ${facilityInfo.phone}`,
+      facilityInfo.fax && `Fax ${facilityInfo.fax}`,
+    ]
+      .filter(Boolean)
+      .join("   ");
+    if (contact) lines.push(contact);
+  }
+
+  if (facilityInfo.website) lines.push(facilityInfo.website);
+
+  if (lines.length === 0) return null;
+
+  return new Paragraph({
+    alignment: AlignmentType.CENTER,
+    border: { top: INFO_BORDER, bottom: INFO_BORDER },
+    spacing: { before: 40, after: 40 },
+    children: lines.map((line, index) =>
+      run(line, { size, break: index === 0 ? undefined : 1 }),
+    ),
+  });
+}
+
+function buildExpertRadiologyParagraph(): Paragraph {
+  return new Paragraph({
+    alignment: AlignmentType.CENTER,
+    spacing: { before: 40, after: 0 },
+    children: [
+      run(EXPERT_RADIOLOGY_INFO.addressLine, {
+        size: EXPERT_TEXT_HALF_POINTS,
+      }),
+      run(EXPERT_RADIOLOGY_INFO.contactLine, {
+        size: EXPERT_TEXT_HALF_POINTS,
+        break: 1,
+      }),
+    ],
+  });
+}
+
+/** Small spacer so the header never visually crowds the patient-data table. */
+function buildSpacerParagraph(): Paragraph {
+  return new Paragraph({ children: [run("", { size: 12 })] });
+}
+
+function buildHeaderContent(
+  data: DotxWizardData,
   logoRun: ImageRun | null,
-  headerLayout: HeaderLayout,
   variant: "first" | "default",
 ): (Paragraph | Table)[] {
+  const { facilityInfo, headerLayout, expertRadiology } = data;
   const isCondensed = variant === "default" && headerLayout.pageOneDifferent;
 
   if (isCondensed) {
     return [
       new Paragraph({
         alignment: AlignmentType.LEFT,
-        children: [
-          new TextRun({ text: facilityInfo.name || "Facility", bold: true }),
-        ],
+        children: [run(facilityInfo.name || "Facility", { bold: true })],
       }),
-      buildDividerParagraph(),
+      buildSpacerParagraph(),
     ];
   }
 
-  // Tagline lives in the footer only (see buildFooterContent) — showing it
-  // in both places duplicated it for the logo-left/centered arrangements.
-  const nameParagraphs = [
-    new Paragraph({
-      alignment:
-        headerLayout.arrangement === "logo-centered-stacked"
-          ? AlignmentType.CENTER
-          : AlignmentType.RIGHT,
-      children: [
-        new TextRun({ text: facilityInfo.name || "Facility Name", bold: true }),
-      ],
-    }),
-  ];
+  const content: (Paragraph | Table)[] = [];
+  const isSideBySide = headerLayout.arrangement === "logo-left-name-right";
 
   const logoParagraph = new Paragraph({
-    alignment:
-      headerLayout.arrangement === "logo-left-address-right"
-        ? AlignmentType.LEFT
-        : AlignmentType.CENTER,
+    alignment: isSideBySide ? AlignmentType.LEFT : AlignmentType.CENTER,
+    spacing: { after: 0 },
     children: logoRun ? [logoRun] : [],
   });
 
-  if (headerLayout.arrangement === "logo-only") {
-    return [logoParagraph, buildDividerParagraph()];
-  }
-
-  if (headerLayout.arrangement === "logo-centered-stacked") {
-    return [logoParagraph, ...nameParagraphs, buildDividerParagraph()];
-  }
-
-  // logo-left-address-right: a borderless 2-column table keeps the logo and
-  // name/tagline as normal inline flowing content side by side — never
-  // absolute/anchored positioning (see the header-template skill's overlap rule).
-  return [
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      // Without explicit column widths, Word/LibreOffice fall back to a
-      // near-zero default grid column — the symptom is header text wrapping
-      // one character per line. columnWidths (the tblGrid) plus a matching
-      // per-cell width keep both readers consistent.
-      columnWidths: [HEADER_LOGO_CELL_TWIPS, HEADER_NAME_CELL_TWIPS],
-      borders: {
-        top: NO_BORDER,
-        bottom: NO_BORDER,
-        left: NO_BORDER,
-        right: NO_BORDER,
-        insideHorizontal: NO_BORDER,
-        insideVertical: NO_BORDER,
-      },
-      rows: [
-        new TableRow({
-          children: [
-            new TableCell({
-              width: { size: HEADER_LOGO_CELL_TWIPS, type: WidthType.DXA },
-              verticalAlign: VerticalAlign.CENTER,
-              children: [logoParagraph],
-            }),
-            new TableCell({
-              width: { size: HEADER_NAME_CELL_TWIPS, type: WidthType.DXA },
-              verticalAlign: VerticalAlign.CENTER,
-              children: nameParagraphs,
-            }),
-          ],
-        }),
-      ],
-    }),
-    buildDividerParagraph(),
-  ];
-}
-
-/** A single location as one centered paragraph with line breaks — matches the
- * real-world reference format (bold city name, then address, then phone). */
-function buildLocationParagraph(loc: Location): Paragraph {
-  const phoneLine = [
-    loc.phone && `Office: ${loc.phone}`,
-    loc.fax && `Fax: ${loc.fax}`,
-  ]
-    .filter(Boolean)
-    .join("  ·  ");
-
-  return new Paragraph({
-    alignment: AlignmentType.CENTER,
+  const nameParagraph = new Paragraph({
+    alignment: isSideBySide ? AlignmentType.RIGHT : AlignmentType.CENTER,
     spacing: { after: 0 },
-    children: [
-      new TextRun({
-        text: loc.name.toUpperCase(),
-        bold: true,
-        size: 17,
-        color: BRAND_NAVY,
-      }),
-      ...(loc.address
-        ? [new TextRun({ text: loc.address, size: 16, break: 1 })]
-        : []),
-      ...(phoneLine
-        ? [new TextRun({ text: phoneLine, size: 16, break: 1 })]
-        : []),
-    ],
+    children: [run(facilityInfo.name || "Facility Name", { bold: true })],
   });
-}
 
-function buildFooterContent(
-  facilityInfo: FacilityInfo,
-  locations: Location[],
-): (Paragraph | Table)[] {
-  const content: (Paragraph | Table)[] = [buildDividerParagraph()];
+  const expertBesideLogo =
+    expertRadiology.include && expertRadiology.placement === "beside-logo";
 
-  if (locations.length === 1) {
-    content.push(buildLocationParagraph(locations[0]));
-  } else if (locations.length > 1) {
-    const colWidth = Math.floor(CONTENT_WIDTH_TWIPS / locations.length);
+  if (isSideBySide || expertBesideLogo) {
+    // A borderless table keeps side-by-side content as normal inline flow —
+    // never absolute/anchored positioning, which is what causes the header to
+    // overlap the body on later pages.
+    const cells: TableCell[] = [];
+    const columnWidths: number[] = [];
+
+    const addCell = (width: number, children: Paragraph[]) => {
+      columnWidths.push(width);
+      cells.push(
+        new TableCell({
+          width: { size: width, type: WidthType.DXA },
+          verticalAlign: VerticalAlign.CENTER,
+          borders: {
+            top: NO_BORDER,
+            bottom: NO_BORDER,
+            left: NO_BORDER,
+            right: NO_BORDER,
+          },
+          children,
+        }),
+      );
+    };
+
+    if (expertBesideLogo) {
+      addCell(Math.round(TABLE_TOTAL_WIDTH / 2), [logoParagraph]);
+      addCell(Math.round(TABLE_TOTAL_WIDTH / 2), [
+        buildExpertRadiologyParagraph(),
+      ]);
+    } else {
+      addCell(Math.round(TABLE_TOTAL_WIDTH * 0.4), [logoParagraph]);
+      addCell(Math.round(TABLE_TOTAL_WIDTH * 0.6), [nameParagraph]);
+    }
+
     content.push(
       new Table({
         width: { size: 100, type: WidthType.PERCENTAGE },
-        columnWidths: locations.map(() => colWidth),
-        alignment: AlignmentType.CENTER,
+        columnWidths,
         borders: {
           top: NO_BORDER,
           bottom: NO_BORDER,
@@ -214,29 +241,110 @@ function buildFooterContent(
           insideHorizontal: NO_BORDER,
           insideVertical: NO_BORDER,
         },
-        rows: [
-          new TableRow({
-            children: locations.map(
-              (loc, index) =>
-                new TableCell({
+        rows: [new TableRow({ children: cells })],
+      }),
+    );
+  } else {
+    content.push(logoParagraph);
+    if (headerLayout.arrangement === "logo-centered-stacked") {
+      content.push(nameParagraph);
+    }
+  }
+
+  if (headerLayout.contactPlacement === "header") {
+    const contact = buildContactBlockParagraph(
+      facilityInfo,
+      data.locations,
+      DOC_FONT_HALF_POINTS,
+    );
+    if (contact) content.push(contact);
+  }
+
+  if (expertRadiology.include && expertRadiology.placement === "header") {
+    content.push(buildExpertRadiologyParagraph());
+  }
+
+  content.push(buildSpacerParagraph());
+  return content;
+}
+
+function buildFooterContent(data: DotxWizardData): (Paragraph | Table)[] {
+  const { facilityInfo, locations, headerLayout, expertRadiology } = data;
+  const content: (Paragraph | Table)[] = [];
+
+  if (headerLayout.contactPlacement === "footer") {
+    if (locations.length > 1) {
+      // Several locations read better side by side than stacked.
+      const colWidth = Math.floor(TABLE_TOTAL_WIDTH / locations.length);
+      content.push(
+        new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          columnWidths: locations.map(() => colWidth),
+          alignment: AlignmentType.CENTER,
+          borders: {
+            top: INFO_BORDER,
+            bottom: INFO_BORDER,
+            left: NO_BORDER,
+            right: NO_BORDER,
+            insideHorizontal: NO_BORDER,
+            insideVertical: NO_BORDER,
+          },
+          rows: [
+            new TableRow({
+              children: locations.map((loc, index) => {
+                const lines: string[] = [];
+                if (loc.name) lines.push(loc.name.toUpperCase());
+                if (loc.address) lines.push(loc.address);
+                const contact = [
+                  loc.phone && `Phone ${loc.phone}`,
+                  loc.fax && `Fax ${loc.fax}`,
+                ]
+                  .filter(Boolean)
+                  .join("   ");
+                if (contact) lines.push(contact);
+
+                return new TableCell({
                   width: { size: colWidth, type: WidthType.DXA },
                   verticalAlign: VerticalAlign.CENTER,
+                  // Cell borders override the table's in OOXML, so the
+                  // top/bottom rules have to be repeated here or the block
+                  // loses its line above and below.
                   borders: {
-                    top: NO_BORDER,
-                    bottom: NO_BORDER,
+                    top: INFO_BORDER,
+                    bottom: INFO_BORDER,
                     left: NO_BORDER,
                     right:
                       index < locations.length - 1
                         ? COLUMN_DIVIDER_BORDER
                         : NO_BORDER,
                   },
-                  children: [buildLocationParagraph(loc)],
-                }),
-            ),
-          }),
-        ],
-      }),
-    );
+                  children: [
+                    new Paragraph({
+                      alignment: AlignmentType.CENTER,
+                      spacing: { after: 0 },
+                      children: lines.map((line, lineIndex) =>
+                        run(line, {
+                          size: FOOTER_TEXT_HALF_POINTS,
+                          bold: lineIndex === 0,
+                          break: lineIndex === 0 ? undefined : 1,
+                        }),
+                      ),
+                    }),
+                  ],
+                });
+              }),
+            }),
+          ],
+        }),
+      );
+    } else {
+      const contact = buildContactBlockParagraph(
+        facilityInfo,
+        locations,
+        FOOTER_TEXT_HALF_POINTS,
+      );
+      if (contact) content.push(contact);
+    }
   }
 
   if (facilityInfo.tagline) {
@@ -245,27 +353,18 @@ function buildFooterContent(
         alignment: AlignmentType.CENTER,
         spacing: { before: 40, after: 0 },
         children: [
-          new TextRun({
-            text: facilityInfo.tagline,
+          run(facilityInfo.tagline, {
             bold: true,
             italics: true,
-            size: 17,
+            size: FOOTER_TEXT_HALF_POINTS,
           }),
         ],
       }),
     );
   }
 
-  if (facilityInfo.website) {
-    content.push(
-      new Paragraph({
-        alignment: AlignmentType.CENTER,
-        spacing: { after: 0 },
-        children: [
-          new TextRun({ text: facilityInfo.website, size: 16, color: BRAND_NAVY }),
-        ],
-      }),
-    );
+  if (expertRadiology.include && expertRadiology.placement === "footer") {
+    content.push(buildExpertRadiologyParagraph());
   }
 
   content.push(
@@ -273,10 +372,18 @@ function buildFooterContent(
       alignment: AlignmentType.RIGHT,
       spacing: { before: 40 },
       children: [
-        new TextRun({ text: "Page ", size: 14, color: "999999" }),
-        new TextRun({ children: [PageNumber.CURRENT], size: 14, color: "999999" }),
-        new TextRun({ text: " of ", size: 14, color: "999999" }),
-        new TextRun({ children: [PageNumber.TOTAL_PAGES], size: 14, color: "999999" }),
+        run("Page ", { size: EXPERT_TEXT_HALF_POINTS }),
+        new TextRun({
+          children: [PageNumber.CURRENT],
+          font: DOC_FONT,
+          size: EXPERT_TEXT_HALF_POINTS,
+        }),
+        run(" of ", { size: EXPERT_TEXT_HALF_POINTS }),
+        new TextRun({
+          children: [PageNumber.TOTAL_PAGES],
+          font: DOC_FONT,
+          size: EXPERT_TEXT_HALF_POINTS,
+        }),
       ],
     }),
   );
@@ -284,133 +391,125 @@ function buildFooterContent(
   return content;
 }
 
-function buildPatientTable(included: BookmarkName[]): Table {
+function buildPatientTable(included: TableBookmarkName[]): Table {
   const rows: VisibleRow[] = computeVisibleRows(included);
+  const { label1, value1, label2, value2 } = TABLE_COLUMN_WIDTHS;
 
-  const tableRows = rows.map(
-    (row) =>
-      new TableRow({
-        children: [
-          buildLabelCell(row.left, LABEL_COL_TWIPS),
-          buildValueCell(row.left, VALUE_COL_TWIPS),
-          buildLabelCell(row.right, LABEL2_COL_TWIPS),
-          buildValueCell(row.right, VALUE2_COL_TWIPS),
-        ],
-      }),
-  );
+  const buildLabelCell = (name: TableBookmarkName | null, width: number) =>
+    new TableCell({
+      width: { size: width, type: WidthType.DXA },
+      children: [
+        new Paragraph({
+          spacing: { after: 0 },
+          // Labels are bold; the bookmark/value cells stay regular weight.
+          children: name
+            ? [run(getBookmarkDefinition(name).label, { bold: true })]
+            : [],
+        }),
+      ],
+    });
+
+  const buildValueCell = (name: TableBookmarkName | null, width: number) =>
+    new TableCell({
+      width: { size: width, type: WidthType.DXA },
+      children: [
+        new Paragraph({
+          spacing: { after: 0 },
+          children: name ? [new Bookmark({ id: name, children: [] })] : [],
+        }),
+      ],
+    });
 
   return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
+    width: { size: TABLE_TOTAL_WIDTH, type: WidthType.DXA },
+    columnWidths: [label1, value1, label2, value2],
     borders: {
-      top: NO_BORDER,
-      bottom: NO_BORDER,
+      // Rule: a line above AND below the block, not just below.
+      top: INFO_BORDER,
+      bottom: INFO_BORDER,
       left: NO_BORDER,
       right: NO_BORDER,
       insideVertical: NO_BORDER,
-      insideHorizontal: ROW_BORDER,
+      insideHorizontal: NO_BORDER,
     },
-    rows: tableRows,
+    rows: rows.map(
+      (row) =>
+        new TableRow({
+          children: [
+            buildLabelCell(row.left, label1),
+            buildValueCell(row.left, value1),
+            buildLabelCell(row.right, label2),
+            buildValueCell(row.right, value2),
+          ],
+        }),
+    ),
   });
-
-  function buildLabelCell(name: BookmarkName | null, width: number) {
-    return new TableCell({
-      width: { size: width, type: WidthType.DXA },
-      children: [
-        new Paragraph({
-          children: name
-            ? [
-                new TextRun({
-                  text: getBookmarkDefinition(name).label,
-                  bold: true,
-                  size: 18,
-                }),
-              ]
-            : [],
-        }),
-      ],
-    });
-  }
-
-  function buildValueCell(name: BookmarkName | null, width: number) {
-    return new TableCell({
-      width: { size: width, type: WidthType.DXA },
-      children: [
-        new Paragraph({
-          children: name
-            ? [new Bookmark({ id: name, children: [] })]
-            : [],
-        }),
-      ],
-    });
-  }
 }
 
 export function buildDocument(
   data: DotxWizardData,
   bakedLogo: BakedImage | null,
 ): Document {
-  const logoRunForDefault = buildLogoImageRun(bakedLogo);
-  const logoRunForFirst = buildLogoImageRun(bakedLogo);
-
   const bodyChildren: FileChild[] = [
     buildPatientTable(data.bookmarkConfig.included),
-    new Paragraph({
-      children: [new Bookmark({ id: "Body", children: [] })],
-    }),
-    new Paragraph({
-      children: [new TextRun(VERSION_MARKER)],
-    }),
   ];
 
-  const pageOneDifferent = data.headerLayout.pageOneDifferent;
+  // RamSoft renders whichever paragraph comes first in document.xml first, so
+  // Addendum must precede Body for addenda to appear at the top of the report.
+  if (data.bookmarkConfig.includeAddendum) {
+    bodyChildren.push(
+      new Paragraph({ children: [new Bookmark({ id: "Addendum", children: [] })] }),
+    );
+  }
 
-  const doc = new Document({
+  bodyChildren.push(
+    new Paragraph({ children: [new Bookmark({ id: "Body", children: [] })] }),
+    new Paragraph({ children: [run(VERSION_MARKER)] }),
+  );
+
+  const pageOneDifferent = data.headerLayout.pageOneDifferent;
+  const makeHeader = (variant: "first" | "default") =>
+    new Header({
+      // A fresh ImageRun per header part: the same instance can't be shared
+      // across parts, since each part owns its own image relationship.
+      children: buildHeaderContent(data, buildLogoImageRun(bakedLogo), variant),
+    });
+
+  return new Document({
+    styles: {
+      // Anything without an explicit override still resolves to Arial 12
+      // instead of silently falling back to the theme's font.
+      default: {
+        document: {
+          run: { font: DOC_FONT, size: DOC_FONT_HALF_POINTS },
+        },
+      },
+    },
     sections: [
       {
         properties: {
           titlePage: pageOneDifferent,
+          page: {
+            margin: {
+              top: PAGE_MARGIN_TWIPS,
+              right: PAGE_MARGIN_TWIPS,
+              bottom: PAGE_MARGIN_TWIPS,
+              left: PAGE_MARGIN_TWIPS,
+            },
+          },
         },
         headers: {
-          default: new Header({
-            children: buildHeaderContent(
-              data.facilityInfo,
-              logoRunForDefault,
-              data.headerLayout,
-              "default",
-            ),
-          }),
-          ...(pageOneDifferent
-            ? {
-                first: new Header({
-                  children: buildHeaderContent(
-                    data.facilityInfo,
-                    logoRunForFirst,
-                    data.headerLayout,
-                    "first",
-                  ),
-                }),
-              }
-            : {}),
+          default: makeHeader("default"),
+          ...(pageOneDifferent ? { first: makeHeader("first") } : {}),
         },
         footers: {
-          default: new Footer({
-            children: buildFooterContent(data.facilityInfo, data.locations),
-          }),
+          default: new Footer({ children: buildFooterContent(data) }),
           ...(pageOneDifferent
-            ? {
-                first: new Footer({
-                  children: buildFooterContent(
-                    data.facilityInfo,
-                    data.locations,
-                  ),
-                }),
-              }
+            ? { first: new Footer({ children: buildFooterContent(data) }) }
             : {}),
         },
         children: bodyChildren,
       },
     ],
   });
-
-  return doc;
 }
