@@ -109,7 +109,7 @@ see [`Dockerfile`](./Dockerfile) and [`nginx.conf`](./nginx.conf).
 
 ```bash
 docker build -t facility-header-builder .
-docker run -p 8080:80 facility-header-builder
+docker run -p 8080:8080 facility-header-builder
 ```
 
 [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) builds and
