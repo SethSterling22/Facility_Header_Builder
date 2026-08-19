@@ -81,7 +81,7 @@ export function PreviewHeader({ variant }: { variant: "first" | "default" }) {
         >
           <div style={{ flex: 1 }}>{logoEl}</div>
           <div style={{ flex: 1 }}>
-            <PreviewExpertRadiology />
+            <PreviewExpertRadiology align="right" />
           </div>
         </div>
       ) : isSideBySide ? (
