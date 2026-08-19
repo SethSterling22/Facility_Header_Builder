@@ -7,11 +7,14 @@ import {
 } from "@/lib/dotx/expertRadiologyLogo";
 import { EXPERT_FONT_PX } from "@/lib/dotx/pageGeometry";
 
-export function PreviewExpertRadiology() {
+export function PreviewExpertRadiology({
+  /** Centered when it stands alone; right-aligned when it sits beside the logo. */
+  align = "center",
+}: {
+  align?: "center" | "right";
+}) {
   return (
-    <div
-      style={{ fontSize: EXPERT_FONT_PX, textAlign: "center", lineHeight: 1.35 }}
-    >
+    <div style={{ fontSize: EXPERT_FONT_PX, textAlign: align, lineHeight: 1.35 }}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={EXPERT_RADIOLOGY_LOGO_DATA_URL}

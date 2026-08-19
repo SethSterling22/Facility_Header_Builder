@@ -196,15 +196,18 @@ function buildAddressLinesParagraph(
  * Expert Radiology's wordmark above its address lines — the same image and
  * layout the already-accepted templates use.
  */
-function buildExpertRadiologyParagraphs(): Paragraph[] {
+function buildExpertRadiologyParagraphs(
+  /** Centered when it stands alone; right-aligned when it sits beside the logo. */
+  alignment: (typeof AlignmentType)[keyof typeof AlignmentType] = AlignmentType.CENTER,
+): Paragraph[] {
   return [
     new Paragraph({
-      alignment: AlignmentType.CENTER,
+      alignment,
       spacing: { before: 40, after: 0 },
       children: [buildExpertLogoRun()],
     }),
     new Paragraph({
-      alignment: AlignmentType.CENTER,
+      alignment,
       spacing: { after: 0 },
       children: [
         run(EXPERT_RADIOLOGY_INFO.addressLine, {
@@ -307,7 +310,9 @@ function buildHeaderContent(
       addCell(Math.round(TABLE_TOTAL_WIDTH / 2), [logoParagraph]);
       addCell(
         Math.round(TABLE_TOTAL_WIDTH / 2),
-        buildExpertRadiologyParagraphs(),
+        // Pinned to the right edge so it balances the facility logo on the
+        // left, rather than floating in the middle of its own half.
+        buildExpertRadiologyParagraphs(AlignmentType.RIGHT),
       );
     } else {
       addCell(Math.round(TABLE_TOTAL_WIDTH * 0.4), [logoParagraph]);
