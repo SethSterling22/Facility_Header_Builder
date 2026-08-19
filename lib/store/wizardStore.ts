@@ -65,6 +65,7 @@ export type LogoState = {
 };
 
 /** Printable width of a Letter page at 0.5in margins — the widest a logo can go. */
+export const DEFAULT_LOGO_WIDTH_INCHES = 2.3;
 export const MAX_LOGO_WIDTH_INCHES = 7.5;
 export const MIN_LOGO_WIDTH_INCHES = 0.5;
 
@@ -140,7 +141,7 @@ const defaultLogo: LogoState = {
   brightness: 1,
   contrast: 1,
   saturation: 1,
-  widthInches: 2.3,
+  widthInches: DEFAULT_LOGO_WIDTH_INCHES,
 };
 
 const defaultHeaderLayout: HeaderLayout = {
@@ -339,9 +340,33 @@ export const useWizardStore = create<WizardState>()(
     }),
     {
       name: "facility-header-builder-wizard",
-      // Bumped when the persisted shape gained the Rule 9/10/12 fields.
-      version: 2,
+      // Bumped whenever the persisted shape gains fields: v2 added the Rule
+      // 9/10/12 config, v3 added the logo's printed width.
+      version: 3,
       migrate: (persisted) => migrateWizardState(persisted) as WizardState,
+      /**
+       * Zustand's default merge is shallow, so a persisted `logo` (or any other
+       * slice) saved before a field existed would replace the default object
+       * wholesale and leave that field undefined. Deep-merging one level down
+       * means adding a field can never strand an older saved session.
+       */
+      merge: (persisted, current) => {
+        if (!persisted || typeof persisted !== "object") return current;
+        const saved = persisted as Record<string, unknown>;
+        const merged: Record<string, unknown> = { ...current };
+
+        for (const [key, value] of Object.entries(saved)) {
+          const base = (current as Record<string, unknown>)[key];
+          const isPlainObject = (v: unknown) =>
+            typeof v === "object" && v !== null && !Array.isArray(v);
+          merged[key] =
+            isPlainObject(base) && isPlainObject(value)
+              ? { ...(base as object), ...(value as object) }
+              : value;
+        }
+
+        return merged as WizardState;
+      },
     },
   ),
 );
