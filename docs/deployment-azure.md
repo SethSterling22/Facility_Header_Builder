@@ -60,21 +60,47 @@ for ns in Microsoft.App Microsoft.OperationalInsights; do echo "$ns: $(az provid
 
 ### 2. Federate the app registration to this repository
 
-OIDC only works if the app registration trusts this specific repo and ref.
-In the Azure Portal: **Microsoft Entra ID → App registrations → your app →
-Certificates & secrets → Federated credentials → Add credential**, choosing
-*GitHub Actions deploying Azure resources*, with:
+OIDC only works if the app registration trusts this specific repo and ref, and
+the credential's **subject must match byte-for-byte** what GitHub presents.
 
-- Organization: `SethSterling22`
-- Repository: `Facility_Header_Builder`
-- Entity type: **Branch**, name `main`
+**Watch out for the ID-based subject format.** The Portal's *GitHub Actions
+deploying Azure resources* wizard generates the classic form:
 
-Add a second credential with entity type **Environment** or **Pull request**
-only if you later deploy from those.
+```
+repo:SethSterling22/Facility_Header_Builder:ref:refs/heads/main
+```
 
-> If the workflow fails at the Azure login step with `AADSTS70021: No matching
-> federated identity record found`, this is what's missing or mismatched —
-> the subject has to match the branch/ref actually being deployed.
+but GitHub may present an "immutable" subject with the numeric owner and repo
+IDs embedded, which does **not** match the above:
+
+```
+repo:SethSterling22@129238500/Facility_Header_Builder@1316607756:ref:refs/heads/main
+```
+
+The reliable approach is to read the subject out of the failed run's log — the
+`AADSTS700213` error prints the exact string under `subject claim` — and create
+a credential with that value verbatim:
+
+```bash
+az ad app federated-credential create \
+  --id <AZURE_CLIENT_ID> \
+  --parameters '{
+    "name": "facility-header-builder-main",
+    "issuer": "https://token.actions.githubusercontent.com",
+    "subject": "<paste the exact subject from the error>",
+    "audiences": ["api://AzureADTokenExchange"]
+  }'
+```
+
+Keeping both credentials (classic and ID-based) on the app is harmless and
+means the deploy survives GitHub switching formats either way.
+
+List what's currently configured with:
+
+```bash
+az ad app federated-credential list --id <AZURE_CLIENT_ID> \
+  --query "[].{name:name, subject:subject}" -o table
+```
 
 ### 3. Give the service principal permission on the resource group
 
@@ -154,7 +180,7 @@ Then open <http://localhost:8080>.
 | Symptom | Likely cause |
 |---|---|
 | `Error: Username and password required` on a registry login step | The workflow is trying to use registry username/password secrets that don't exist. This setup uses `GITHUB_TOKEN` for GHCR — the workflow shouldn't reference `ACR_USERNAME`/`ACR_PASSWORD` at all. |
-| `AADSTS70021: No matching federated identity record found` | The app registration has no federated credential matching this repo **and** ref — see step 2. |
+| `AADSTS700213: No matching federated identity record found` | The credential's subject doesn't match what GitHub presented. Compare the `subject claim` printed in the run log against `az ad app federated-credential list` — most often the presented one carries numeric owner/repo IDs (`owner@123/repo@456`) while the configured one doesn't. See step 2. |
 | `MissingSubscriptionRegistration` on any `az ... create` | The resource provider named in the error isn't registered — see step 1. |
 | Azure login succeeds but `az containerapp update` returns *AuthorizationFailed* | The service principal has no role on the resource group — see step 3. |
 | Deploy succeeds but the app has no URL | Ingress is internal — see step 5. |
