@@ -35,6 +35,11 @@ import {
   type TableBookmarkName,
 } from "./bookmarks";
 import { fitDimensions, type BakedImage } from "./bakeLogo";
+import {
+  PAGE_HEIGHT_TWIPS,
+  PAGE_MARGIN_TWIPS,
+  PAGE_WIDTH_TWIPS,
+} from "./pageGeometry";
 
 const NO_BORDER = { style: BorderStyle.NONE, size: 0, color: "auto" };
 /** Every bordered info block gets the same weight line above and below it. */
@@ -49,9 +54,6 @@ const COLUMN_DIVIDER_BORDER = {
   size: 4,
   color: "D9D9D9",
 };
-
-/** 0.5in margins so the 10800-twip patient table fits a Letter page exactly. */
-const PAGE_MARGIN_TWIPS = 720;
 
 const FOOTER_TEXT_HALF_POINTS = 16; // 8pt
 const EXPERT_TEXT_HALF_POINTS = 14; // 7pt
@@ -154,9 +156,17 @@ function buildExpertRadiologyParagraph(): Paragraph {
   });
 }
 
-/** Small spacer so the header never visually crowds the patient-data table. */
+/**
+ * Small spacer so the header never visually crowds the patient-data table.
+ * Carries its size on the paragraph mark only — an empty `<w:t></w:t>` run is
+ * pointless content that Word itself never writes.
+ */
 function buildSpacerParagraph(): Paragraph {
-  return new Paragraph({ children: [run("", { size: 12 })] });
+  return new Paragraph({
+    spacing: { after: 0 },
+    run: { font: DOC_FONT, size: 12 },
+    children: [],
+  });
 }
 
 function buildHeaderContent(
@@ -490,6 +500,9 @@ export function buildDocument(
         properties: {
           titlePage: pageOneDifferent,
           page: {
+            // Explicit US Letter — the default is A4, which is narrower than
+            // the patient-data table and pushes it off the page.
+            size: { width: PAGE_WIDTH_TWIPS, height: PAGE_HEIGHT_TWIPS },
             margin: {
               top: PAGE_MARGIN_TWIPS,
               right: PAGE_MARGIN_TWIPS,

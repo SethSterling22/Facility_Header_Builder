@@ -159,6 +159,65 @@ const initialState = {
   validation: { status: "idle", messages: [] } as ValidationResult,
 };
 
+const VALID_ARRANGEMENTS: HeaderArrangement[] = [
+  "logo-only",
+  "logo-centered-stacked",
+  "logo-left-name-right",
+];
+
+/**
+ * Sessions saved before the Rule 9/10/12 fields existed are still perfectly
+ * usable — the facility's name, logo and locations didn't change shape. Fill in
+ * the new fields with their defaults rather than throwing the user's
+ * in-progress work away.
+ */
+function migrateWizardState(persisted: unknown): typeof initialState {
+  if (!persisted || typeof persisted !== "object") return initialState;
+  const old = persisted as Record<string, unknown>;
+
+  const merge = <T extends object>(fallback: T, value: unknown): T =>
+    value && typeof value === "object"
+      ? { ...fallback, ...(value as Partial<T>) }
+      : fallback;
+
+  const headerLayout = merge(defaultHeaderLayout, old.headerLayout);
+  // "logo-left-address-right" was renamed once the address moved to the footer.
+  if (!VALID_ARRANGEMENTS.includes(headerLayout.arrangement)) {
+    headerLayout.arrangement = "logo-left-name-right";
+  }
+
+  const oldBookmarks = merge(
+    { included: [...DEFAULT_BOOKMARK_ORDER], includeAddendum: false },
+    old.bookmarkConfig,
+  );
+  // `Body` used to live in this list; it's implicit now.
+  const included = (
+    Array.isArray(oldBookmarks.included) ? oldBookmarks.included : []
+  ).filter((name): name is TableBookmarkName =>
+    (DEFAULT_BOOKMARK_ORDER as readonly string[]).includes(name),
+  );
+
+  return {
+    ...initialState,
+    mode: (old.mode as WizardMode) ?? null,
+    currentStep: typeof old.currentStep === "number" ? old.currentStep : 0,
+    facilityInfo: merge(defaultFacilityInfo, old.facilityInfo),
+    logo: merge(defaultLogo, old.logo),
+    locations: Array.isArray(old.locations)
+      ? (old.locations as Location[])
+      : [],
+    headerLayout,
+    bookmarkConfig: {
+      included: included.length > 0 ? included : [...DEFAULT_BOOKMARK_ORDER],
+      includeAddendum: Boolean(oldBookmarks.includeAddendum),
+    },
+    expertRadiology: merge(defaultExpertRadiology, old.expertRadiology),
+    importedRawLines: Array.isArray(old.importedRawLines)
+      ? (old.importedRawLines as string[])
+      : [],
+  };
+}
+
 export const useWizardStore = create<WizardState>()(
   persist(
     (set) => ({
@@ -263,9 +322,9 @@ export const useWizardStore = create<WizardState>()(
     }),
     {
       name: "facility-header-builder-wizard",
-      // Bumped when the persisted shape changed (new Rule 9/10/12 fields).
-      // Older saved sessions are dropped rather than half-migrated.
+      // Bumped when the persisted shape gained the Rule 9/10/12 fields.
       version: 2,
+      migrate: (persisted) => migrateWizardState(persisted) as WizardState,
     },
   ),
 );

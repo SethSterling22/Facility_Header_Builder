@@ -1,6 +1,26 @@
 import { TABLE_COLUMN_WIDTHS, TABLE_TOTAL_WIDTH } from "./bookmarks";
 
 /**
+ * US Letter, in twips. This has to be set explicitly: `docx` defaults to A4
+ * (11906 twips wide), which leaves only 10466 twips of printable width and
+ * makes the 10800-twip patient table overflow the page.
+ */
+export const PAGE_WIDTH_TWIPS = 12240;
+export const PAGE_HEIGHT_TWIPS = 15840;
+export const PAGE_MARGIN_TWIPS = 720; // 0.5in
+
+/** Printable width — exactly the width the patient-data table is built to. */
+export const CONTENT_WIDTH_TWIPS =
+  PAGE_WIDTH_TWIPS - PAGE_MARGIN_TWIPS * 2;
+
+if (CONTENT_WIDTH_TWIPS !== TABLE_TOTAL_WIDTH) {
+  throw new Error(
+    `Patient table is ${TABLE_TOTAL_WIDTH} twips but the printable width is ${CONTENT_WIDTH_TWIPS}. ` +
+      "Adjust the column widths or the page margins so the table fits the page.",
+  );
+}
+
+/**
  * Real page geometry, in CSS pixels at 96dpi, so the live preview can be laid
  * out with the same proportions the generated .dotx uses rather than an
  * eyeballed approximation.

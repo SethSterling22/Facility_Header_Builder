@@ -185,6 +185,47 @@ async function verify({ name, data, withLogo }: Scenario): Promise<string> {
     );
   }
 
+  // Page geometry: docx defaults to A4, which is too narrow for the table.
+  const pageSize = documentXml.match(/<w:pgSz w:w="(\d+)" w:h="(\d+)"/);
+  const pageWidth = Number(pageSize?.[1] ?? 0);
+  check("page size is US Letter", pageWidth === 12240 && pageSize?.[2] === "15840",
+    pageSize ? `got ${pageSize[1]}x${pageSize[2]}` : "no pgSz");
+
+  const margins = documentXml.match(/<w:pgMar w:top="\d+" w:right="(\d+)"[^>]*w:left="(\d+)"/);
+  const printable =
+    pageWidth - Number(margins?.[1] ?? 0) - Number(margins?.[2] ?? 0);
+  const tableWidth = Number(
+    documentXml.match(/<w:tblW w:type="dxa" w:w="(\d+)"/)?.[1] ?? 0,
+  );
+  check(
+    "patient table fits the printable width",
+    tableWidth > 0 && tableWidth <= printable,
+    `table ${tableWidth} vs printable ${printable}`,
+  );
+
+  // Duplicate bookmark IDs are invalid OOXML and this is a bookmark-driven
+  // merge engine, so they have to be unique across every part.
+  const allBookmarkIds: string[] = [];
+  for (const path of partsMatching(
+    /^word\/(document|header\d+|footer\d+)\.xml$/,
+  )) {
+    const xml = await read(path);
+    allBookmarkIds.push(
+      ...[...xml.matchAll(/<w:bookmarkStart[^>]*w:id="(\d+)"/g)].map((m) => m[1]),
+    );
+  }
+  check(
+    "bookmark w:id values are unique document-wide",
+    new Set(allBookmarkIds).size === allBookmarkIds.length,
+    `${allBookmarkIds.length} bookmarks, ${new Set(allBookmarkIds).size} unique`,
+  );
+
+  check(
+    "no empty text runs",
+    !documentXml.includes("></w:t>") &&
+      !(await read("word/header1.xml")).includes("></w:t>"),
+  );
+
   let imageRelCount = 0;
   for (const path of partsMatching(/^word\/_rels\/(header|footer)\d+\.xml\.rels$/)) {
     const xml = await read(path);
