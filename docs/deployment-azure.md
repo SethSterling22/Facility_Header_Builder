@@ -1,202 +1,162 @@
 # Deploying to Azure
 
-This walks through the one-time Azure setup needed before
-[`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) can build
-and deploy the app on every push to `main`. It's written assuming you have
-**not** created any Azure resources for this project yet.
+The app deploys to **Azure Container Apps**, with the image hosted on
+**GitHub Container Registry (GHCR)** and GitHub Actions authenticating to
+Azure via **OIDC** — no long-lived credentials stored anywhere.
 
-If the workflow already failed with `Error: Username and password required`
-on the "Log in to Azure Container Registry" step, that just means the
-`ACR_USERNAME`/`ACR_PASSWORD` secrets aren't set yet — jump to
-[Configure GitHub secrets](#7-configure-the-github-repository-secrets) once
-you've created the registry.
+[`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) runs on every
+push to `main`: it builds the static export, verifies the generated `.dotx`,
+pushes the image to GHCR, and points the Container App at the new tag.
 
-## Prerequisites
+## Current setup
 
-- An Azure subscription.
-- The [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)
-  (`az`) installed and you're logged in: `az login`.
-- The [GitHub CLI](https://cli.github.com) (`gh`), logged in
-  (`gh auth login`) — used below to set repo secrets from the terminal. You
-  can also set them from **Settings → Secrets and variables → Actions** in
-  the GitHub UI instead.
-- Docker, to build the image once locally for the very first deploy.
+| Thing | Value |
+|---|---|
+| Container App | `facility-header-builder` |
+| Resource group | `template-builder` |
+| Image | `ghcr.io/sethsterling22/facility_header_builder` |
+| Target port | `8080` (must match `EXPOSE` in the Dockerfile and `listen` in `nginx.conf`) |
 
-Set a few shell variables to reuse throughout (adjust names/region/repo):
+These are set as `env:` in the workflow rather than secrets — none of them are
+sensitive, and keeping them visible makes the workflow easier to follow.
+
+## Required repository secrets
+
+Only three, all for OIDC:
+
+| Secret | What it is |
+|---|---|
+| `AZURE_CLIENT_ID` | Application (client) ID of the app registration federated to this repo |
+| `AZURE_TENANT_ID` | Directory (tenant) ID |
+| `AZURE_SUBSCRIPTION_ID` | Target subscription ID |
+
+Check them with:
 
 ```bash
+gh secret list --repo SethSterling22/Facility_Header_Builder
+```
+
+There is deliberately **no** `AZURE_CREDENTIALS`, and no registry
+username/password: GHCR pushes use the workflow's built-in `GITHUB_TOKEN`,
+and Azure login uses OIDC.
+
+## One-time setup
+
+### 1. Register the resource providers
+
+A fresh subscription fails every `az ... create` with
+`MissingSubscriptionRegistration` until its provider is registered. This is
+per-subscription and only needs doing once:
+
+```bash
+az provider register --namespace Microsoft.App --wait && az provider register --namespace Microsoft.OperationalInsights --wait
+```
+
+Confirm both report `Registered`:
+
+```bash
+for ns in Microsoft.App Microsoft.OperationalInsights; do echo "$ns: $(az provider show -n $ns --query registrationState -o tsv)"; done
+```
+
+### 2. Federate the app registration to this repository
+
+OIDC only works if the app registration trusts this specific repo and ref.
+In the Azure Portal: **Microsoft Entra ID → App registrations → your app →
+Certificates & secrets → Federated credentials → Add credential**, choosing
+*GitHub Actions deploying Azure resources*, with:
+
+- Organization: `SethSterling22`
+- Repository: `Facility_Header_Builder`
+- Entity type: **Branch**, name `main`
+
+Add a second credential with entity type **Environment** or **Pull request**
+only if you later deploy from those.
+
+> If the workflow fails at the Azure login step with `AADSTS70021: No matching
+> federated identity record found`, this is what's missing or mismatched —
+> the subject has to match the branch/ref actually being deployed.
+
+### 3. Give the service principal permission on the resource group
+
+It needs to update the Container App:
+
+```bash
+CLIENT_ID=$(gh secret list --repo SethSterling22/Facility_Header_Builder >/dev/null && echo "<paste AZURE_CLIENT_ID>")
 SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-RESOURCE_GROUP=facility-header-builder-rg
-LOCATION=westus2
-ACR_NAME=facilityheaderbuilder   # must be globally unique, letters/numbers only
-CONTAINER_APP_ENV=facility-header-builder-env
-CONTAINER_APP_NAME=facility-header-builder
-GITHUB_REPO=SethSterling22/Facility_Header_Builder
+
+az role assignment create \
+  --assignee "$CLIENT_ID" \
+  --role Contributor \
+  --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/template-builder"
 ```
 
-## 1. Create a resource group
+### 4. Let the Container App pull from GHCR
+
+If the GHCR package is **public**, nothing to do — Container Apps pulls it
+anonymously.
+
+If it's **private**, give the app a pull credential using a GitHub personal
+access token with `read:packages`:
 
 ```bash
-az group create --name "$RESOURCE_GROUP" --location "$LOCATION"
+az containerapp registry set \
+  --name facility-header-builder \
+  --resource-group template-builder \
+  --server ghcr.io \
+  --username <your-github-username> \
+  --password <PAT with read:packages>
 ```
 
-## 2. Register the resource providers
+You can make the package public instead from the repo's **Packages** page →
+the package → **Package settings** → *Change visibility*.
 
-A fresh Azure subscription doesn't have every resource provider enabled, and
-each `az ... create` below fails with `MissingSubscriptionRegistration` until
-its provider is registered. Register all three up front — registration is
-per-subscription and only ever needs doing once:
+### 5. Expose the app publicly
 
-```bash
-az provider register --namespace Microsoft.ContainerRegistry --wait && az provider register --namespace Microsoft.App --wait && az provider register --namespace Microsoft.OperationalInsights --wait
-```
-
-`Microsoft.ContainerRegistry` is for the registry, `Microsoft.App` for
-Container Apps, and `Microsoft.OperationalInsights` for the Log Analytics
-workspace a Container Apps environment creates behind the scenes.
-
-Confirm all three report `Registered` before continuing:
+The Container App currently has **internal** ingress, so it has no public URL.
+To make it reachable:
 
 ```bash
-for ns in Microsoft.ContainerRegistry Microsoft.App Microsoft.OperationalInsights; do echo "$ns: $(az provider show -n $ns --query registrationState -o tsv)"; done
-```
-
-## 3. Create the Azure Container Registry (ACR)
-
-```bash
-az acr create \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$ACR_NAME" \
-  --sku Basic \
-  --admin-enabled true
-```
-
-`--admin-enabled true` turns on the registry's built-in admin account, which
-is the simplest way to get a username/password pair for
-`docker/login-action` in the workflow. (For a hardened setup later, swap this
-for a service principal scoped to `AcrPush`/`AcrPull` instead — not necessary
-to get started.)
-
-Grab the values the workflow needs:
-
-```bash
-ACR_LOGIN_SERVER=$(az acr show --name "$ACR_NAME" --query loginServer -o tsv)
-ACR_USERNAME=$(az acr credential show --name "$ACR_NAME" --query username -o tsv)
-ACR_PASSWORD=$(az acr credential show --name "$ACR_NAME" --query "passwords[0].value" -o tsv)
-echo "$ACR_LOGIN_SERVER"
-```
-
-## 4. Build and push the image once, manually
-
-The Container App needs a real image to point at when it's first created.
-From the repo root:
-
-```bash
-az acr login --name "$ACR_NAME"
-docker build -t "$ACR_LOGIN_SERVER/facility-header-builder:initial" .
-docker push "$ACR_LOGIN_SERVER/facility-header-builder:initial"
-```
-
-## 5. Create the Container Apps environment and the app
-
-```bash
-az extension add --name containerapp --upgrade
-
-az containerapp env create \
-  --name "$CONTAINER_APP_ENV" \
-  --resource-group "$RESOURCE_GROUP" \
-  --location "$LOCATION"
-
-az containerapp create \
-  --name "$CONTAINER_APP_NAME" \
-  --resource-group "$RESOURCE_GROUP" \
-  --environment "$CONTAINER_APP_ENV" \
-  --image "$ACR_LOGIN_SERVER/facility-header-builder:initial" \
-  --registry-server "$ACR_LOGIN_SERVER" \
-  --registry-username "$ACR_USERNAME" \
-  --registry-password "$ACR_PASSWORD" \
+az containerapp ingress enable \
+  --name facility-header-builder \
+  --resource-group template-builder \
+  --type external \
   --target-port 8080 \
-  --ingress external \
-  --min-replicas 0 \
-  --max-replicas 2
+  --transport auto
 ```
 
-`--ingress external` gives it a public HTTPS URL — print it with:
+Then print the URL:
 
 ```bash
-az containerapp show --name "$CONTAINER_APP_NAME" --resource-group "$RESOURCE_GROUP" \
+az containerapp show --name facility-header-builder --resource-group template-builder \
   --query properties.configuration.ingress.fqdn -o tsv
 ```
 
-## 6. Create a service principal for GitHub Actions
+## Deploying
 
-This is what lets `azure/login` in the workflow authenticate as your Azure
-account, scoped to just this resource group:
-
-```bash
-az ad sp create-for-rbac \
-  --name "facility-header-builder-gha" \
-  --role Contributor \
-  --scopes "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP" \
-  --json-auth
-```
-
-That prints a JSON blob like:
-
-```json
-{
-  "clientId": "...",
-  "clientSecret": "...",
-  "subscriptionId": "...",
-  "tenantId": "..."
-}
-```
-
-Copy the whole JSON output — that's the value for the `AZURE_CREDENTIALS`
-secret below. (If your `az` version doesn't support `--json-auth`, run the
-same command without that flag and assemble the JSON yourself from the
-`appId`/`password`/`tenant` fields it prints, plus `$SUBSCRIPTION_ID`.)
-
-## 7. Configure the GitHub repository secrets
+Push to `main`, or trigger it by hand:
 
 ```bash
-gh secret set ACR_LOGIN_SERVER --repo "$GITHUB_REPO" --body "$ACR_LOGIN_SERVER"
-gh secret set ACR_USERNAME --repo "$GITHUB_REPO" --body "$ACR_USERNAME"
-gh secret set ACR_PASSWORD --repo "$GITHUB_REPO" --body "$ACR_PASSWORD"
-gh secret set ACR_NAME --repo "$GITHUB_REPO" --body "$ACR_NAME"
-gh secret set CONTAINER_APP_NAME --repo "$GITHUB_REPO" --body "$CONTAINER_APP_NAME"
-gh secret set AZURE_RESOURCE_GROUP --repo "$GITHUB_REPO" --body "$RESOURCE_GROUP"
-
-# Paste the JSON blob from step 6 when prompted, or pipe it in directly:
-gh secret set AZURE_CREDENTIALS --repo "$GITHUB_REPO" --body '<paste the JSON from step 6>'
+gh workflow run deploy.yml --repo SethSterling22/Facility_Header_Builder
+gh run watch --repo SethSterling22/Facility_Header_Builder
 ```
 
-Verify they're all there:
+## Running the container locally
 
 ```bash
-gh secret list --repo "$GITHUB_REPO"
+docker build -t facility-header-builder .
+docker run -p 8080:8080 facility-header-builder
 ```
 
-You should see all seven: `ACR_LOGIN_SERVER`, `ACR_USERNAME`, `ACR_PASSWORD`,
-`ACR_NAME`, `AZURE_CREDENTIALS`, `CONTAINER_APP_NAME`, `AZURE_RESOURCE_GROUP`.
-
-## 8. Trigger the workflow
-
-Push to `main` (or re-run the last failed workflow run from the **Actions**
-tab). It will build the image, push it to ACR tagged `latest` and with the
-commit SHA, then update the Container App to that SHA-tagged image.
-
-```bash
-gh run list --repo "$GITHUB_REPO" --workflow deploy.yml --limit 3
-gh run watch --repo "$GITHUB_REPO"
-```
+Then open <http://localhost:8080>.
 
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
-| `MissingSubscriptionRegistration` on any `az ... create` | The resource provider for that service isn't registered on the subscription — see step 2. The namespace it names in the error is the one to register. |
-| `Error: Username and password required` on the ACR login step | `ACR_USERNAME`/`ACR_PASSWORD` secrets aren't set, or the registry's admin account is disabled (`--admin-enabled true` above). |
-| `azure/login` fails with an auth error | `AZURE_CREDENTIALS` isn't valid JSON, or the service principal's scope doesn't include the resource group the Container App lives in. |
-| `container-apps-deploy-action` can't find the Container App | `CONTAINER_APP_NAME` / `AZURE_RESOURCE_GROUP` secrets don't match what you created above, or the service principal's role assignment doesn't cover that resource group. |
-| Deploy succeeds but the site 404s on `/builder` | Check `nginx.conf` shipped correctly in the image — `try_files $uri $uri.html $uri/ =404;` should resolve `/builder` to `/builder.html` from the static export. |
+| `Error: Username and password required` on a registry login step | The workflow is trying to use registry username/password secrets that don't exist. This setup uses `GITHUB_TOKEN` for GHCR — the workflow shouldn't reference `ACR_USERNAME`/`ACR_PASSWORD` at all. |
+| `AADSTS70021: No matching federated identity record found` | The app registration has no federated credential matching this repo **and** ref — see step 2. |
+| `MissingSubscriptionRegistration` on any `az ... create` | The resource provider named in the error isn't registered — see step 1. |
+| Azure login succeeds but `az containerapp update` returns *AuthorizationFailed* | The service principal has no role on the resource group — see step 3. |
+| Deploy succeeds but the app has no URL | Ingress is internal — see step 5. |
+| Revision fails with an image pull error | The GHCR package is private and the app has no pull credential — see step 4. Also check the image reference isn't double-prefixed (e.g. `docker.io/ghcr.io/...`, which resolves to Docker Hub). |
+| Site loads but `/builder` 404s | `nginx.conf`'s `try_files $uri $uri.html $uri/ =404;` resolves `/builder` to `/builder.html` from the static export — check it shipped in the image. |
