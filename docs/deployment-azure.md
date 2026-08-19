@@ -8,7 +8,7 @@ and deploy the app on every push to `main`. It's written assuming you have
 If the workflow already failed with `Error: Username and password required`
 on the "Log in to Azure Container Registry" step, that just means the
 `ACR_USERNAME`/`ACR_PASSWORD` secrets aren't set yet — jump to
-[Configure GitHub secrets](#5-configure-the-github-repository-secrets) once
+[Configure GitHub secrets](#7-configure-the-github-repository-secrets) once
 you've created the registry.
 
 ## Prerequisites
@@ -40,7 +40,28 @@ GITHUB_REPO=SethSterling22/Facility_Header_Builder
 az group create --name "$RESOURCE_GROUP" --location "$LOCATION"
 ```
 
-## 2. Create the Azure Container Registry (ACR)
+## 2. Register the resource providers
+
+A fresh Azure subscription doesn't have every resource provider enabled, and
+each `az ... create` below fails with `MissingSubscriptionRegistration` until
+its provider is registered. Register all three up front — registration is
+per-subscription and only ever needs doing once:
+
+```bash
+az provider register --namespace Microsoft.ContainerRegistry --wait && az provider register --namespace Microsoft.App --wait && az provider register --namespace Microsoft.OperationalInsights --wait
+```
+
+`Microsoft.ContainerRegistry` is for the registry, `Microsoft.App` for
+Container Apps, and `Microsoft.OperationalInsights` for the Log Analytics
+workspace a Container Apps environment creates behind the scenes.
+
+Confirm all three report `Registered` before continuing:
+
+```bash
+for ns in Microsoft.ContainerRegistry Microsoft.App Microsoft.OperationalInsights; do echo "$ns: $(az provider show -n $ns --query registrationState -o tsv)"; done
+```
+
+## 3. Create the Azure Container Registry (ACR)
 
 ```bash
 az acr create \
@@ -65,7 +86,7 @@ ACR_PASSWORD=$(az acr credential show --name "$ACR_NAME" --query "passwords[0].v
 echo "$ACR_LOGIN_SERVER"
 ```
 
-## 3. Build and push the image once, manually
+## 4. Build and push the image once, manually
 
 The Container App needs a real image to point at when it's first created.
 From the repo root:
@@ -76,7 +97,7 @@ docker build -t "$ACR_LOGIN_SERVER/facility-header-builder:initial" .
 docker push "$ACR_LOGIN_SERVER/facility-header-builder:initial"
 ```
 
-## 4. Create the Container Apps environment and the app
+## 5. Create the Container Apps environment and the app
 
 ```bash
 az extension add --name containerapp --upgrade
@@ -94,7 +115,7 @@ az containerapp create \
   --registry-server "$ACR_LOGIN_SERVER" \
   --registry-username "$ACR_USERNAME" \
   --registry-password "$ACR_PASSWORD" \
-  --target-port 80 \
+  --target-port 8080 \
   --ingress external \
   --min-replicas 0 \
   --max-replicas 2
@@ -107,7 +128,7 @@ az containerapp show --name "$CONTAINER_APP_NAME" --resource-group "$RESOURCE_GR
   --query properties.configuration.ingress.fqdn -o tsv
 ```
 
-## 5. Create a service principal for GitHub Actions
+## 6. Create a service principal for GitHub Actions
 
 This is what lets `azure/login` in the workflow authenticate as your Azure
 account, scoped to just this resource group:
@@ -136,7 +157,7 @@ secret below. (If your `az` version doesn't support `--json-auth`, run the
 same command without that flag and assemble the JSON yourself from the
 `appId`/`password`/`tenant` fields it prints, plus `$SUBSCRIPTION_ID`.)
 
-## 6. Configure the GitHub repository secrets
+## 7. Configure the GitHub repository secrets
 
 ```bash
 gh secret set ACR_LOGIN_SERVER --repo "$GITHUB_REPO" --body "$ACR_LOGIN_SERVER"
@@ -146,8 +167,8 @@ gh secret set ACR_NAME --repo "$GITHUB_REPO" --body "$ACR_NAME"
 gh secret set CONTAINER_APP_NAME --repo "$GITHUB_REPO" --body "$CONTAINER_APP_NAME"
 gh secret set AZURE_RESOURCE_GROUP --repo "$GITHUB_REPO" --body "$RESOURCE_GROUP"
 
-# Paste the JSON blob from step 5 when prompted, or pipe it in directly:
-gh secret set AZURE_CREDENTIALS --repo "$GITHUB_REPO" --body '<paste the JSON from step 5>'
+# Paste the JSON blob from step 6 when prompted, or pipe it in directly:
+gh secret set AZURE_CREDENTIALS --repo "$GITHUB_REPO" --body '<paste the JSON from step 6>'
 ```
 
 Verify they're all there:
@@ -156,10 +177,10 @@ Verify they're all there:
 gh secret list --repo "$GITHUB_REPO"
 ```
 
-You should see all six: `ACR_LOGIN_SERVER`, `ACR_USERNAME`, `ACR_PASSWORD`,
+You should see all seven: `ACR_LOGIN_SERVER`, `ACR_USERNAME`, `ACR_PASSWORD`,
 `ACR_NAME`, `AZURE_CREDENTIALS`, `CONTAINER_APP_NAME`, `AZURE_RESOURCE_GROUP`.
 
-## 7. Trigger the workflow
+## 8. Trigger the workflow
 
 Push to `main` (or re-run the last failed workflow run from the **Actions**
 tab). It will build the image, push it to ACR tagged `latest` and with the
@@ -174,6 +195,7 @@ gh run watch --repo "$GITHUB_REPO"
 
 | Symptom | Likely cause |
 |---|---|
+| `MissingSubscriptionRegistration` on any `az ... create` | The resource provider for that service isn't registered on the subscription — see step 2. The namespace it names in the error is the one to register. |
 | `Error: Username and password required` on the ACR login step | `ACR_USERNAME`/`ACR_PASSWORD` secrets aren't set, or the registry's admin account is disabled (`--admin-enabled true` above). |
 | `azure/login` fails with an auth error | `AZURE_CREDENTIALS` isn't valid JSON, or the service principal's scope doesn't include the resource group the Container App lives in. |
 | `container-apps-deploy-action` can't find the Container App | `CONTAINER_APP_NAME` / `AZURE_RESOURCE_GROUP` secrets don't match what you created above, or the service principal's role assignment doesn't cover that resource group. |

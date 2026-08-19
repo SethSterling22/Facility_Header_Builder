@@ -54,10 +54,12 @@ export function mapImportToWizardState(parsed: ParsedTemplate) {
           ]
         : undefined,
     headerLayout: { pageOneDifferent: parsed.hasPageOneVariant },
-    bookmarkConfig:
-      parsed.includedBookmarks.length > 0
+    bookmarkConfig: {
+      ...(parsed.includedBookmarks.length > 0
         ? { included: parsed.includedBookmarks }
-        : undefined,
+        : {}),
+      includeAddendum: parsed.hasAddendum,
+    },
     importedRawLines: parsed.rawTextLines,
   };
 }

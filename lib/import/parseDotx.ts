@@ -1,5 +1,8 @@
 import JSZip from "jszip";
-import { BOOKMARK_DEFINITIONS, type BookmarkName } from "@/lib/dotx/bookmarks";
+import {
+  BOOKMARK_DEFINITIONS,
+  type TableBookmarkName,
+} from "@/lib/dotx/bookmarks";
 
 const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const R_NS =
@@ -10,7 +13,9 @@ const REL_NS =
 export type ParsedTemplate = {
   logoDataUrl: string | null;
   rawTextLines: string[];
-  includedBookmarks: BookmarkName[];
+  includedBookmarks: TableBookmarkName[];
+  /** Templates carrying the optional 10th bookmark keep it on re-export. */
+  hasAddendum: boolean;
   hasPageOneVariant: boolean;
 };
 
@@ -62,15 +67,18 @@ function extractTextLines(doc: Document): string[] {
   return lines;
 }
 
-function extractBookmarkNames(doc: Document): BookmarkName[] {
-  const known = new Set(BOOKMARK_DEFINITIONS.map((b) => b.name));
-  const found: BookmarkName[] = [];
-  for (const bm of Array.from(
-    doc.getElementsByTagNameNS(W_NS, "bookmarkStart"),
-  )) {
-    const name = bm.getAttributeNS(W_NS, "name");
-    if (name && known.has(name as BookmarkName) && !found.includes(name as BookmarkName)) {
-      found.push(name as BookmarkName);
+function extractAllBookmarkNames(doc: Document): string[] {
+  return Array.from(doc.getElementsByTagNameNS(W_NS, "bookmarkStart"))
+    .map((bm) => bm.getAttributeNS(W_NS, "name"))
+    .filter((name): name is string => Boolean(name));
+}
+
+function extractTableBookmarks(names: string[]): TableBookmarkName[] {
+  const known = new Set<string>(BOOKMARK_DEFINITIONS.map((b) => b.name));
+  const found: TableBookmarkName[] = [];
+  for (const name of names) {
+    if (known.has(name) && !found.includes(name as TableBookmarkName)) {
+      found.push(name as TableBookmarkName);
     }
   }
   return found;
@@ -194,12 +202,13 @@ export async function parseDotx(file: File): Promise<ParsedTemplate> {
     rawTextLines.push(...extractTextLines(parseXml(partXml)));
   }
 
-  const includedBookmarks = extractBookmarkNames(documentDoc);
+  const allBookmarks = extractAllBookmarkNames(documentDoc);
 
   return {
     logoDataUrl,
     rawTextLines: Array.from(new Set(rawTextLines)),
-    includedBookmarks,
+    includedBookmarks: extractTableBookmarks(allBookmarks),
+    hasAddendum: allBookmarks.includes("Addendum"),
     hasPageOneVariant,
   };
 }
